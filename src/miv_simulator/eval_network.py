@@ -23,6 +23,9 @@ from miv_simulator.optimization import (
     update_network_params,
 )
 from miv_simulator.optimize_network import compute_objectives, init_network
+from miv_simulator.network_objectives import (
+    load_network_opt_config,
+)
 
 logger = get_module_logger(__name__)
 
@@ -70,12 +73,11 @@ def eval_network(
 
     target_populations = operational_config["target_populations"]
     param_config_name = operational_config["param_config_name"]
-    objective_names = operational_config["objective_names"]
+    objective_names = operational_config["objective_names"]  # noqa: F841
 
-    # Set results file id
+    # Sets results file id
     network_config.setdefault("results_file_id", f"eval_network_{run_ts}")
 
-    # Initialize the network
     comm = MPI.COMM_WORLD
     env = init_network(comm=comm, subworld_size=None, kwargs=network_config)
 
@@ -117,7 +119,7 @@ def eval_network(
     param_tuples = opt_param_config.param_tuples
     opt_targets = opt_param_config.opt_targets
 
-    # Map parameter names to (param_tuple, value) pairs
+    # Map parameter names to (param_tuple, value) pairs and apply parameters to network
     if params_dict is not None:
         param_tuple_values = []
         for param_name, param_tuple in zip(param_names, param_tuples):
@@ -130,7 +132,6 @@ def eval_network(
                 ][p.param_path]
             param_tuple_values.append((param_tuple, param_value))
 
-        # Apply parameters to the network
         if rank == 0:
             logger.info("Applying optimized parameters to network")
         update_network_params(env, param_tuple_values)
@@ -143,11 +144,11 @@ def eval_network(
         logger.info(f"Running simulation (t_stop={env.tstop} ms)")
     network.run(env, output=False)
 
-    # Extract features from in-memory spike data before any output flushing
     t_stop = env.tstop
+    # Extract features from in-memory data
     features = network_features(env, t_start, t_stop, target_populations)
 
-    # Write simulation output to disk
+    # Write simulation output
     if rank == 0:
         logger.info(f"Writing output to {env.results_file_path}")
         io_utils.mkout(env, env.results_file_path)
@@ -159,33 +160,41 @@ def eval_network(
         io_utils.lfpout(env, env.results_file_path)
 
     # Compute objectives using same reduction as the optimizer controller
-    result = compute_objectives([{0: features}], operational_config, opt_targets)
+    opt_config = load_network_opt_config(env.netclamp_config, target_populations)
+    result = compute_objectives(
+        [{0: features}], operational_config, opt_targets, opt_config
+    )
     objectives_arr, features_arr, constraints_arr = result[0]
 
-    # Log results
     if rank == 0:
         logger.info("=== Evaluation Results ===")
-        for name, val in zip(objective_names, objectives_arr.tolist()):
+        objective_names_opt = opt_config.objective_names()
+        constraint_names = opt_config.constraint_names()
+        for name, val in zip(objective_names_opt, objectives_arr.tolist()):
             logger.info(f"  objective  {name}: {val:.6f}")
-        for name, val in zip(objective_names, features_arr[0].tolist()):
+        feature_names_opt = [  # noqa: F841
+            f"{p}.{f}"
+            for f in ["mean_rate", "fraction_active", "rate_cv"]
+            for p in target_populations
+        ]
+        for name, val in zip(objective_names_opt, features_arr[0].tolist()):
             logger.info(f"  feature    {name}: {val:.6f}")
-        for pop_name, val in zip(target_populations, constraints_arr.tolist()):
-            logger.info(f"  constraint {pop_name} positive rate: {val:.6f}")
+        for name, val in zip(constraint_names, constraints_arr.tolist()):
+            logger.info(f"  constraint {name}: {val:.6f}")
 
         if output_path is not None:
             output_data = {
                 params_label: {
                     "parameters": params_dict,
                     "objectives": dict(
-                        zip(objective_names, [float(v) for v in objectives_arr])
+                        zip(objective_names_opt, [float(v) for v in objectives_arr])
                     ),
                     "features": dict(
-                        zip(objective_names, [float(v) for v in features_arr[0]])
+                        zip(objective_names_opt, [float(v) for v in features_arr[0]])
                     ),
-                    "constraints": {
-                        f"{pop} positive rate": float(c)
-                        for pop, c in zip(target_populations, constraints_arr)
-                    },
+                    "constraints": dict(
+                        zip(constraint_names, [float(c) for c in constraints_arr])
+                    ),
                 }
             }
             with open(output_path, "w") as f:

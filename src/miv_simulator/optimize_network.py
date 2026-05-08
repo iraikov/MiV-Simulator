@@ -3,7 +3,6 @@
 Network model optimization script for optimization with dmosopt
 """
 
-import gc
 import os
 import sys
 import datetime
@@ -30,6 +29,9 @@ from miv_simulator.optimization import (
     optimization_params,
     update_network_params,
     network_features,
+)
+from miv_simulator.network_objectives import (
+    load_network_opt_config,
 )
 
 from dmosopt import dmosopt
@@ -176,7 +178,7 @@ def optimize_network(
     network_config.update(operational_config.get("kwargs", {}))
     env = Env(**network_config)
 
-    objective_names = operational_config["objective_names"]
+    objective_names = operational_config["objective_names"]  # noqa: F841
     param_config_name = operational_config["param_config_name"]
     target_populations = operational_config["target_populations"]
 
@@ -195,6 +197,9 @@ def optimize_network(
         for param_pattern, param_tuple in zip(param_names, param_tuples)
     }
 
+    opt_config = load_network_opt_config(env.netclamp_config, target_populations)
+    opt_config.validate_picklable()
+
     init_objfun = "init_network_objfun"
     init_params = {
         "operational_config": operational_config,
@@ -212,11 +217,10 @@ def optimize_network(
     if resample_fraction < 0.1:
         resample_fraction = 0.1
 
-    # Create an optimizer
-    feature_dtypes = [(feature_name, np.float32) for feature_name in objective_names]
-    constraint_names = [
-        f"{target_pop_name} positive rate" for target_pop_name in target_populations
-    ]
+    feature_dtypes = opt_config.feature_dtypes()
+    constraint_names = opt_config.constraint_names()
+    objective_names_opt = opt_config.objective_names()
+
     surrogate_method_kwargs = copy.copy(surrogate_method_kwargs)
     if "batch_size" not in surrogate_method_kwargs:
         surrogate_method_kwargs["batch_size"] = 400
@@ -231,10 +235,10 @@ def optimize_network(
             "use_coreneuron": network_config.get("use_coreneuron", False),
         },
         "reduce_fun_name": "miv_simulator.optimize_network.compute_objectives",
-        "reduce_fun_args": (operational_config, opt_targets),
+        "reduce_fun_args": (operational_config, opt_targets, opt_config),
         "problem_parameters": {},
         "space": hyperprm_space,
-        "objective_names": objective_names,
+        "objective_names": objective_names_opt,
         "feature_dtypes": feature_dtypes,
         "constraint_names": constraint_names,
         "n_initial": n_initial,
@@ -307,7 +311,6 @@ def init_network_objfun(
         f"optimize_network_{worker.worker_id}_{operational_config['run_ts']}"
     )
     nprocs_per_worker = operational_config["nprocs_per_worker"]
-    # logger = get_script_logger(os.path.basename(__file__))
     env = init_network(
         comm=worker.merged_comm, subworld_size=nprocs_per_worker, kwargs=kwargs
     )
@@ -371,111 +374,57 @@ def network_objfun(
     return network_features(env, t_start, t_stop, target_populations)
 
 
-def compute_objectives(local_features, operational_config, opt_targets):
-    all_features_dict = {}
-    constraints = []
+def _merge_pop_features(pop_features_dicts):
+    """Aggregate per-worker per-population raw spike dicts into one.
 
-    active_threshold = 0.01
+    Sums n_total, n_active; merges spike_density_dict keys; uses first worker's time_bins.
+    """
+    if not pop_features_dicts:
+        return {}
+
+    result = {
+        "n_total": 0,
+        "n_active": 0,
+        "time_bins": None,
+        "spike_density_dict": {},
+    }
+
+    for pop_feature_dict in pop_features_dicts:
+        result["n_total"] += pop_feature_dict["n_total"]
+        result["n_active"] += pop_feature_dict["n_active"]
+        if result["time_bins"] is None:
+            result["time_bins"] = pop_feature_dict["time_bins"]
+        result["spike_density_dict"].update(pop_feature_dict["spike_density_dict"])
+
+    return result
+
+
+def compute_objectives(local_features, operational_config, opt_targets, opt_config):
+    all_features_dict = {}
+
     target_populations = operational_config["target_populations"]
-    temporal_resolution = operational_config["temporal_resolution"]
+
     for pop_name in target_populations:
         pop_features_dicts = [
             features_dict[0][pop_name] for features_dict in local_features
         ]
+        merged = _merge_pop_features(pop_features_dicts)
+        for feature in opt_config.features:
+            if feature.populations is not None and pop_name not in feature.populations:
+                continue
+            for fname, fval in feature.compute(pop_name, merged).items():
+                all_features_dict[f"{pop_name}.{fname}"] = fval
 
-        sum_mean_rate = 0.0
-        n_total = 0
-        n_active = 0
-        time_bins_ref = None
-        sum_active_per_bin = None
-        for pop_feature_dict in pop_features_dicts:
-            n_active_local = pop_feature_dict["n_active"]
-            n_total_local = pop_feature_dict["n_total"]
-            time_bins = pop_feature_dict["time_bins"]
-            if time_bins_ref is None:
-                time_bins_ref = time_bins
-            spike_density_dict = pop_feature_dict["spike_density_dict"]
-            sum_mean_rate_local = 0.0
-            t_start = time_bins_ref[0]
-            t_end = time_bins_ref[-1] + (time_bins_ref[1] - time_bins_ref[0])
-            # time bins for fraction active per time bin calculation
-            fr_time_bins = np.arange(t_start, t_end, temporal_resolution)
-            fr_time_centers = (fr_time_bins + temporal_resolution / 2).astype(
-                np.float32
-            )
-            if sum_active_per_bin is None:
-                sum_active_per_bin = np.zeros_like(fr_time_centers, dtype=np.float32)
-            for gid, dens_dict in spike_density_dict.items():
-                mean_rate = np.mean(dens_dict["rate"])
-                if mean_rate > 0.0:
-                    sum_mean_rate_local += mean_rate
-                ip_rate = np.interp(
-                    fr_time_centers,
-                    time_bins_ref,
-                    dens_dict["rate"].astype(np.float32),
-                ).astype(np.float32)
-                active_per_bin = ip_rate > active_threshold
-                sum_active_per_bin += active_per_bin
-
-            n_total += n_total_local
-            n_active += n_active_local
-            sum_mean_rate += sum_mean_rate_local
-
-        if n_active > 0:
-            mean_rate = sum_mean_rate / n_active
-        else:
-            mean_rate = 0.0
-
-        if n_total > 0:
-            fraction_active = n_active / n_total
-            mean_fraction_active_per_bin = np.mean(sum_active_per_bin / float(n_total))
-            std_fraction_active_per_bin = np.std(sum_active_per_bin / float(n_total))
-        else:
-            fraction_active = 0.0
-            mean_fraction_active_per_bin = 0.0
-            std_fraction_active_per_bin = 0.0
-
-        logger.info(
-            f"population {pop_name}: n_active = {n_active} n_total = {n_total} mean rate = {mean_rate}"
-        )
-
-        all_features_dict[f"{pop_name} mean fraction active per time bin"] = float(
-            mean_fraction_active_per_bin
-        )
-        all_features_dict[f"{pop_name} std fraction active per time bin"] = float(
-            std_fraction_active_per_bin
-        )
-        all_features_dict[f"{pop_name} fraction active"] = float(fraction_active)
-        all_features_dict[f"{pop_name} firing rate"] = float(mean_rate)
-
-        rate_constr = mean_rate if mean_rate > 0.0 else -1.0
-        constraints.append(rate_constr)
-
-    gc.collect()
-
-    objective_names = operational_config["objective_names"]
-    feature_dtypes = [(feature_name, np.float32) for feature_name in objective_names]
-
-    target_vals = opt_targets
-    objectives = []
-    features = []
-    for key in objective_names:
-        feature_val = all_features_dict[key]
-        if key in target_vals:
-            objective = (feature_val - target_vals[key]) ** 2
-            logger.info(
-                f"objective {key}: {objective} target: {target_vals[key]} feature: {feature_val}"
-            )
-        else:
-            objective = -feature_val
-            logger.info(f"objective {key}: {objective} feature: {feature_val}")
-        objectives.append(objective)
-        features.append(feature_val)
+    objectives = [-obj.compute(all_features_dict) for obj in opt_config.objectives]
+    features = [
+        all_features_dict.get(obj.required_features[0], 0.0)
+        for obj in opt_config.objectives
+    ]
+    constraints = [c.compute(all_features_dict) for c in opt_config.constraints]
 
     result = (
         np.asarray(objectives, dtype=np.float32),
-        np.array([tuple(features)], dtype=np.dtype(feature_dtypes)),
+        np.array([tuple(features)], dtype=np.dtype(opt_config.feature_dtypes())),
         np.asarray(constraints, dtype=np.float32),
     )
-
     return {0: result}
