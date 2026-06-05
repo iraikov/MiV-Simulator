@@ -178,9 +178,16 @@ def optimize_network(
     network_config.update(operational_config.get("kwargs", {}))
     env = Env(**network_config)
 
-    objective_names = operational_config["objective_names"]  # noqa: F841
     param_config_name = operational_config["param_config_name"]
-    target_populations = operational_config["target_populations"]
+
+    # Load optimization config from operational_config (derives target_populations
+    # from Objectives and Constraints in the YAML)
+    opt_config = load_network_opt_config(operational_config)
+    opt_config.validate_picklable()
+
+    target_populations = opt_config.target_populations()
+    # Store for downstream consumers (e.g. init_network_objfun)
+    operational_config["target_populations"] = target_populations
 
     opt_param_config = optimization_params(
         env.netclamp_config.optimize_parameters,
@@ -196,9 +203,6 @@ def optimize_network(
         param_pattern: [param_tuple.param_range[0], param_tuple.param_range[1]]
         for param_pattern, param_tuple in zip(param_names, param_tuples)
     }
-
-    opt_config = load_network_opt_config(env.netclamp_config, target_populations)
-    opt_config.validate_picklable()
 
     init_objfun = "init_network_objfun"
     init_params = {
@@ -402,7 +406,7 @@ def _merge_pop_features(pop_features_dicts):
 def compute_objectives(local_features, operational_config, opt_targets, opt_config):
     all_features_dict = {}
 
-    target_populations = operational_config["target_populations"]
+    target_populations = opt_config.target_populations()
 
     for pop_name in target_populations:
         pop_features_dicts = [

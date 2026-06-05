@@ -6,7 +6,7 @@ Network optimization objectives and constraints framework.
 import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Union, Set
 
 import numpy as np
 
@@ -121,6 +121,42 @@ class NetworkOptimizationConfig:
     def feature_dtypes(self) -> List[tuple]:
         """[(obj.name, np.float32) for obj in objectives]."""
         return [(obj.name, np.float32) for obj in self.objectives]
+
+    def target_populations(self) -> List[str]:
+        """Derive unique population names from objectives and constraints."""
+        pops: Set[str] = set()
+        for obj in self.objectives:
+            pops.update(self._extract_populations(obj))
+        for c in self.constraints:
+            pops.update(self._extract_populations(c))
+        return sorted(pops)
+
+    @staticmethod
+    def _extract_populations(
+        item: Union[NetworkObjective, NetworkConstraint],
+    ) -> List[str]:
+        """Extract population names from an objective or constraint instance."""
+        pops: List[str] = []
+
+        # Direct population attributes on built-ins
+        if hasattr(item, "_pop_name") and item._pop_name is not None:
+            pops.append(item._pop_name)
+        if hasattr(item, "_pop_names") and item._pop_names is not None:
+            pops.extend(item._pop_names)
+        if hasattr(item, "_num_pop") and item._num_pop is not None:
+            pops.append(item._num_pop)
+        if hasattr(item, "_denom_pop") and item._denom_pop is not None:
+            pops.append(item._denom_pop)
+
+        # Fallback: parse required_features namespace prefixes
+        if not pops:
+            for feat in item.required_features:
+                if "." in feat:
+                    # Namespaced like "CA3.mean_rate" -> "CA3"
+                    pop = feat.split(".")[0]
+                    pops.append(pop)
+
+        return pops
 
     def validate_picklable(self) -> None:
         """Validate that this config is picklable."""
@@ -472,9 +508,11 @@ class MaximizeFeatureObjective(NetworkObjective):
 
     def __init__(
         self,
-        required_features: List[str],
+        required_features: List[str] = None,
+        pop_name: str = None,
         name: Optional[str] = None,
     ):
+        self._pop_name = pop_name
         self._required_features = required_features
         self._name = name
 
@@ -482,8 +520,9 @@ class MaximizeFeatureObjective(NetworkObjective):
     def name(self) -> str:
         if self._name is not None:
             return self._name
-        # Use first feature name as default
-        return self._required_features[0].replace(".", " ")
+        if self._required_features:
+            return self._required_features[0].replace(".", " ")
+        return "maximize_feature"
 
     @property
     def required_features(self) -> List[str]:
@@ -597,20 +636,19 @@ class SteadyFiringConstraint(NetworkConstraint):
 
 
 def load_network_opt_config(
-    netclamp_config: Dict,
-    target_populations: List[str],
+    config: Dict,
 ) -> NetworkOptimizationConfig:
     """
-    Reads the "Network Optimization" namespace from netclamp_config and
+    Reads the "Network Optimization" namespace from the given config dict and
     builds a NetworkOptimizationConfig by importing classes via importlib.
 
-    Returns a config with default built-in features if the namespace is absent.
+    If the namespace is absent, returns an empty config (user must populate it).
     """
 
-    network_opt_config = netclamp_config.get("Network Optimization", {})
+    network_opt_config = config.get("Network Optimization", {})
 
     if not network_opt_config:
-        return _get_default_network_config(target_populations)
+        return NetworkOptimizationConfig()
 
     feature_entries = network_opt_config.get("Features", [])
     objective_entries = network_opt_config.get("Objectives", [])
@@ -660,7 +698,19 @@ def _load_objective_list(entries: List[Dict]) -> List[NetworkObjective]:
             module_path, class_name = class_path.rsplit(".", 1)
             module = importlib.import_module(module_path)
             cls = getattr(module, class_name)
-            instance = cls(**entry.get("kwargs", {}))
+
+            # Promote pop_name / pop_names from top-level YAML to kwargs
+            kwargs = entry.get("kwargs", {}).copy()
+            if "pop_name" in entry:
+                kwargs["pop_name"] = entry["pop_name"]
+            if "pop_names" in entry:
+                kwargs["pop_names"] = entry["pop_names"]
+            if "num_pop" in entry:
+                kwargs["num_pop"] = entry["num_pop"]
+            if "denom_pop" in entry:
+                kwargs["denom_pop"] = entry["denom_pop"]
+
+            instance = cls(**kwargs)
             if "name" in entry:
                 instance._name = entry["name"]
             objectives.append(instance)
@@ -681,33 +731,16 @@ def _load_constraint_list(entries: List[Dict]) -> List[NetworkConstraint]:
             module_path, class_name = class_path.rsplit(".", 1)
             module = importlib.import_module(module_path)
             cls = getattr(module, class_name)
-            instance = cls(**entry.get("kwargs", {}))
+
+            # Promote pop_name from top-level YAML to kwargs
+            kwargs = entry.get("kwargs", {}).copy()
+            if "pop_name" in entry:
+                kwargs["pop_name"] = entry["pop_name"]
+
+            instance = cls(**kwargs)
             if "name" in entry:
                 instance._name = entry["name"]
             constraints.append(instance)
         else:
             raise ValueError(f"Invalid constraint entry: {entry}")
     return constraints
-
-
-def _get_default_network_config(
-    target_populations: List[str],
-) -> NetworkOptimizationConfig:
-    features = [
-        MeanFiringRateFeature(),
-        FractionActiveFeature(),
-        FiringRateStabilityFeature(),
-    ]
-
-    objectives = []
-    constraints = []
-
-    for pop_name in target_populations:
-        objectives.append(TargetRateObjective(pop_name, target_rate=1.0))
-        constraints.append(FiringRateBoundConstraint(pop_name, min_rate=0.0))
-
-    return NetworkOptimizationConfig(
-        features=features,
-        objectives=objectives,
-        constraints=constraints,
-    )

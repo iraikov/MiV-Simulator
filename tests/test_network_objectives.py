@@ -246,15 +246,13 @@ def test_network_optimization_config():
 
 
 def test_load_network_opt_config_default():
-    """Default config when no 'Network Optimization' section is present."""
+    """Default config when no 'Network Optimization' section is present returns empty config."""
     env_config = {}
-    target_pops = ["CA3", "DG"]
-    opt_config = mod.load_network_opt_config(env_config, target_pops)
-
-    assert len(opt_config.features) >= 2
-    assert len(opt_config.objectives) == 2
-    assert len(opt_config.constraints) == 2
-
+    opt_config = mod.load_network_opt_config(env_config)
+    assert len(opt_config.features) == 0
+    assert len(opt_config.objectives) == 0
+    assert len(opt_config.constraints) == 0
+    assert opt_config.target_populations() == []
     print("  test_load_network_opt_config_default passed")
 
 

@@ -868,7 +868,7 @@ def plot_spike_raster(
                 sct = axes[i].scatter(
                     this_pop_spkts,
                     this_pop_spkinds,
-                    s=1,
+                    s=0.1,
                     linewidths=fig_options.lw,
                     marker=marker,
                     c=pop_colors[pop_name],
@@ -944,7 +944,8 @@ def plot_spike_raster(
                 ax.set_position([box.x0, box.y0, box.width * 0.85, box.height])
         if pop_rates:
             lgd_labels = [
-                f"{pop_name} ({info[0]:.02f}% active; {info[1]:.3g} Hz)"
+                # f"{pop_name} ({info[0]:.02f}% active; {info[1]:.3g} Hz)"
+                f"{pop_name} ({info[1]:.3g} Hz)"
                 for pop_name, info in zip_longest(spkpoplst, lgd_info)
             ]
         else:
@@ -960,7 +961,7 @@ def plot_spike_raster(
             fontsize="small",
             scatterpoints=1,
             markerscale=5.0,
-            bbox_to_anchor=(1.002, 0.5),
+            bbox_to_anchor=(1.0025, 0.5),
             bbox_transform=plt.gcf().transFigure,
         )
         fig.artists.append(lgd)

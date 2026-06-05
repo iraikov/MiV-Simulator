@@ -71,9 +71,13 @@ def eval_network(
     operational_config = read_from_yaml(config_path)
     network_config.update(operational_config.get("kwargs", {}))
 
-    target_populations = operational_config["target_populations"]
+    # Load optimization config (derives target_populations from Objectives/Constraints)
+    opt_config = load_network_opt_config(operational_config)
+    target_populations = opt_config.target_populations()
+    # Store back into operational_config for downstream consumers
+    operational_config["target_populations"] = target_populations
+
     param_config_name = operational_config["param_config_name"]
-    objective_names = operational_config["objective_names"]  # noqa: F841
 
     # Sets results file id
     network_config.setdefault("results_file_id", f"eval_network_{run_ts}")
@@ -160,7 +164,7 @@ def eval_network(
         io_utils.lfpout(env, env.results_file_path)
 
     # Compute objectives using same reduction as the optimizer controller
-    opt_config = load_network_opt_config(env.netclamp_config, target_populations)
+    opt_config = load_network_opt_config(operational_config)
     result = compute_objectives(
         [{0: features}], operational_config, opt_targets, opt_config
     )

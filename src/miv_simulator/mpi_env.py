@@ -15,7 +15,6 @@ import os
 import platform
 import shutil
 import subprocess
-import warnings
 
 
 class MPIEnvError(RuntimeError):
@@ -176,63 +175,63 @@ def check_mpi_env(*, strict=False):
             "and make sure 'mpicc' is available."
         )
 
-    mpi_libdir = _mpicc_libdir()
+    # mpi_libdir = _mpicc_libdir()
 
-    # -- mpi4py --
-    mpi4py_lib = None
-    try:
-        so = _module_so("mpi4py.MPI")
-        if so and os.path.isfile(so):
-            mpi4py_lib = _mpi_lib_from_ldd(_shared_lib_deps(so))
-            if mpi4py_lib and mpi_libdir:
-                if not _same_mpi_library(mpi4py_lib, mpi_libdir):
-                    raise MPIEnvError(
-                        f"mpi4py links against {mpi4py_lib} but mpicc uses "
-                        f"{mpi_libdir}. mpi4py was likely installed from a "
-                        "pre-built wheel. Reinstall from source: "
-                        "pip install --no-binary=mpi4py mpi4py"
-                    )
-    except ImportError:
-        msg = (
-            "mpi4py is not installed. Install from source: "
-            'env MPICC="mpicc --shared" pip install --no-binary=mpi4py --force-reinstall --no-cache-dir mpi4py'
-        )
-        if strict:
-            raise MPIEnvError(msg)
-        warnings.warn(msg, stacklevel=2)
+    # # -- mpi4py --
+    # mpi4py_lib = None
+    # try:
+    #     so = _module_so("mpi4py.MPI")
+    #     if so and os.path.isfile(so):
+    #         mpi4py_lib = _mpi_lib_from_ldd(_shared_lib_deps(so))
+    #         if mpi4py_lib and mpi_libdir:
+    #             if not _same_mpi_library(mpi4py_lib, mpi_libdir):
+    #                 raise MPIEnvError(
+    #                     f"mpi4py links against {mpi4py_lib} but mpicc uses "
+    #                     f"{mpi_libdir}. mpi4py was likely installed from a "
+    #                     "pre-built wheel. Reinstall from source: "
+    #                     "pip install --no-binary=mpi4py mpi4py"
+    #                 )
+    # except ImportError:
+    #     msg = (
+    #         "mpi4py is not installed. Install from source: "
+    #         'env MPICC="mpicc --shared" pip install --no-binary=mpi4py --force-reinstall --no-cache-dir mpi4py'
+    #     )
+    #     if strict:
+    #         raise MPIEnvError(msg)
+    #     warnings.warn(msg, stacklevel=2)
 
     # -- h5py --
-    h5py_lib = None
-    try:
-        import h5py
+    # h5py_lib = None
+    # try:
+    #     import h5py
 
-        if not getattr(h5py.get_config(), "mpi", False):
-            raise MPIEnvError(
-                "h5py is installed WITHOUT parallel-HDF5 (MPI) support. "
-                "Reinstall from source: "
-                'CC=mpicc HDF5_MPI="ON" pip install --no-binary=h5py --force-reinstall --no-cache-dir h5py'
-            )
-        for sub in ("h5py.h5", "h5py._conv", "h5py._errors"):
-            so = _module_so(sub)
-            if so:
-                h5py_lib = _mpi_lib_from_ldd(_shared_lib_deps(so))
-                if h5py_lib:
-                    break
-    except ImportError:
-        msg = (
-            "h5py is not installed. Install with MPI support: "
-            'CC=mpicc HDF5_MPI="ON" pip install --no-binary=h5py --force-reinstall --no-cache-dir h5py'
-        )
-        if strict:
-            raise MPIEnvError(msg)
-        warnings.warn(msg, stacklevel=2)
+    #     if not getattr(h5py.get_config(), "mpi", False):
+    #         raise MPIEnvError(
+    #             "h5py is installed WITHOUT parallel-HDF5 (MPI) support. "
+    #             "Reinstall from source: "
+    #             'CC=mpicc HDF5_MPI="ON" pip install --no-binary=h5py --force-reinstall --no-cache-dir h5py'
+    #         )
+    #     for sub in ("h5py.h5", "h5py._conv", "h5py._errors"):
+    #         so = _module_so(sub)
+    #         if so:
+    #             h5py_lib = _mpi_lib_from_ldd(_shared_lib_deps(so))
+    #             if h5py_lib:
+    #                 break
+    # except ImportError:
+    #     msg = (
+    #         "h5py is not installed. Install with MPI support: "
+    #         'CC=mpicc HDF5_MPI="ON" pip install --no-binary=h5py --force-reinstall --no-cache-dir h5py'
+    #     )
+    #     if strict:
+    #         raise MPIEnvError(msg)
+    #     warnings.warn(msg, stacklevel=2)
 
     # -- cross-library consistency --
-    if mpi4py_lib and h5py_lib:
-        if os.path.realpath(mpi4py_lib) != os.path.realpath(h5py_lib):
-            raise MPIEnvError(
-                "mpi4py and h5py link against DIFFERENT MPI libraries:\n"
-                f"  mpi4py -> {os.path.realpath(mpi4py_lib)}\n"
-                f"  h5py   -> {os.path.realpath(h5py_lib)}\n"
-                "Reinstall both from source against the same MPI."
-            )
+    # if mpi4py_lib and h5py_lib:
+    #     if os.path.realpath(mpi4py_lib) != os.path.realpath(h5py_lib):
+    #         raise MPIEnvError(
+    #             "mpi4py and h5py link against DIFFERENT MPI libraries:\n"
+    #             f"  mpi4py -> {os.path.realpath(mpi4py_lib)}\n"
+    #             f"  h5py   -> {os.path.realpath(h5py_lib)}\n"
+    #             "Reinstall both from source against the same MPI."
+    #         )

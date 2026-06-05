@@ -363,7 +363,7 @@ def test_yaml_loading():
             ],
         }
     }
-    opt_config = mod_no.load_network_opt_config(netclamp_config, ["CA3"])
+    opt_config = mod_no.load_network_opt_config(netclamp_config)
     assert len(opt_config.features) == 3
     assert len(opt_config.objectives) == 1
     assert len(opt_config.constraints) == 1
