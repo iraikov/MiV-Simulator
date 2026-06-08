@@ -201,7 +201,7 @@ def test_compute_objectives_steady_firing():
     objectives, features, constraints = result[0]
     assert objectives.shape == (1,)
     assert constraints.shape == (1,)
-    assert constraints[0] <= 0.0  # feasible
+    assert constraints[0] > 0.0  # feasible
     print("  test_compute_objectives_steady_firing passed")
 
 
@@ -228,7 +228,7 @@ def test_compute_objectives_burst_then_silence():
         local_features, operational_config, {}, opt_config
     )
     objectives, features, constraints = result[0]
-    assert constraints[0] > 0.0  # infeasible (CV too high)
+    assert constraints[0] <= 0.0  # infeasible (CV too high)
     # compute_objectives negates for dmosopt minimizer: -(-2.0) = 2.0
     assert objectives[0] > 1.0  # heavily penalized in dmosopt space
     print("  test_compute_objectives_burst_then_silence passed")
@@ -262,8 +262,8 @@ def test_compute_objectives_silent_population():
     objectives, features, constraints = result[0]
 
     # Both constraints should be infeasible for silent population
-    assert constraints[0] > 0.0  # rate too low
-    assert constraints[1] > 0.0  # fraction too low
+    assert constraints[0] <= 0.0  # rate too low
+    assert constraints[1] <= 0.0  # fraction too low
     print("  test_compute_objectives_silent_population passed")
 
 
@@ -298,7 +298,7 @@ def test_compute_objectives_cross_pop():
     objectives, features, constraints = result[0]
     assert objectives.shape == (1,)
     assert constraints.shape == (2,)
-    assert all(c <= 0.0 for c in constraints)  # all feasible
+    assert all(c > 0.0 for c in constraints)  # all feasible
     print("  test_compute_objectives_cross_pop passed")
 
 
@@ -329,7 +329,7 @@ def test_compute_objectives_multi_worker():
         local_features, operational_config, {}, opt_config
     )
     objectives, features, constraints = result[0]
-    assert constraints[0] <= 0.0  # feasible
+    assert constraints[0] > 0.0  # feasible
     print("  test_compute_objectives_multi_worker passed")
 
 

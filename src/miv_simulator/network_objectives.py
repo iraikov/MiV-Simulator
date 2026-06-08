@@ -75,7 +75,7 @@ class NetworkConstraint(ABC):
 
     @abstractmethod
     def compute(self, feature_values: Dict[str, float]) -> float:
-        """c_i <= 0 -> feasible (dmosopt convention)."""
+        """c_i > 0 -> feasible (dmosopt convention: np.all(C > 0.0, axis=1))."""
         ...
 
 
@@ -588,9 +588,9 @@ class FiringRateBoundConstraint(NetworkConstraint):
 
     def compute(self, feature_values: Dict[str, float]) -> float:
         rate = feature_values.get(f"{self._pop_name}.mean_rate", 0.0)
-        c1 = self._min_rate - rate
-        c2 = rate - self._max_rate
-        return max(c1, c2)
+        c1 = rate - self._min_rate
+        c2 = self._max_rate - rate
+        return min(c1, c2)
 
 
 class MinActiveFractionConstraint(NetworkConstraint):
@@ -611,7 +611,7 @@ class MinActiveFractionConstraint(NetworkConstraint):
 
     def compute(self, feature_values: Dict[str, float]) -> float:
         frac = feature_values.get(f"{self._pop_name}.fraction_active", 0.0)
-        return self._min_fraction - frac
+        return frac - self._min_fraction
 
 
 class SteadyFiringConstraint(NetworkConstraint):
@@ -632,7 +632,7 @@ class SteadyFiringConstraint(NetworkConstraint):
 
     def compute(self, feature_values: Dict[str, float]) -> float:
         rate_cv = feature_values.get(f"{self._pop_name}.rate_cv", 0.0)
-        return rate_cv - self._max_cv
+        return self._max_cv - rate_cv
 
 
 def load_network_opt_config(

@@ -181,13 +181,13 @@ def test_firing_rate_bound_constraint():
     assert c.name == "CA3_rate_bound"
     assert c.required_features == ["CA3.mean_rate"]
 
-    # Below min -> infeasible (positive)
+    # Below min -> infeasible (non-positive)
     val = c.compute({"CA3.mean_rate": 0.0})
-    assert val > 0
-
-    # Above min -> feasible (negative)
-    val = c.compute({"CA3.mean_rate": 1.0})
     assert val <= 0
+
+    # Above min -> feasible (positive)
+    val = c.compute({"CA3.mean_rate": 1.0})
+    assert val > 0
 
     print("  test_firing_rate_bound_constraint passed")
 
@@ -196,13 +196,13 @@ def test_steady_firing_constraint():
     c = mod.SteadyFiringConstraint("CA3", max_cv=0.5)
     assert c.required_features == ["CA3.rate_cv"]
 
-    # Within bound -> feasible
+    # Within bound -> feasible (positive)
     val = c.compute({"CA3.rate_cv": 0.1})
-    assert val <= 0
-
-    # Exceeds bound -> infeasible
-    val = c.compute({"CA3.rate_cv": 1.0})
     assert val > 0
+
+    # Exceeds bound -> infeasible (non-positive)
+    val = c.compute({"CA3.rate_cv": 1.0})
+    assert val <= 0
 
     print("  test_steady_firing_constraint passed")
 
