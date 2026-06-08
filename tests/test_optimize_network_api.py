@@ -202,6 +202,16 @@ def test_compute_objectives_steady_firing():
     assert objectives.shape == (1,)
     assert constraints.shape == (1,)
     assert constraints[0] > 0.0  # feasible
+    # features array: one row, one column per NetworkFeature scalar across populations
+    # MeanFiringRateFeature(1) + FractionActiveFeature(1) + FiringRateStabilityFeature(3) = 5 for CA3
+    assert set(features.dtype.names) == {
+        "CA3.mean_rate",
+        "CA3.fraction_active",
+        "CA3.mean_fraction_active_per_bin",
+        "CA3.std_fraction_active_per_bin",
+        "CA3.rate_cv",
+    }
+    assert abs(features[0]["CA3.mean_rate"] - 5.0) < 0.1
     print("  test_compute_objectives_steady_firing passed")
 
 
@@ -231,6 +241,14 @@ def test_compute_objectives_burst_then_silence():
     assert constraints[0] <= 0.0  # infeasible (CV too high)
     # compute_objectives negates for dmosopt minimizer: -(-2.0) = 2.0
     assert objectives[0] > 1.0  # heavily penalized in dmosopt space
+    # features: MeanFiringRateFeature(1) + FiringRateStabilityFeature(3) = 4 for CA3
+    assert set(features.dtype.names) == {
+        "CA3.mean_rate",
+        "CA3.mean_fraction_active_per_bin",
+        "CA3.std_fraction_active_per_bin",
+        "CA3.rate_cv",
+    }
+    assert features[0]["CA3.rate_cv"] > 1.0  # high CV confirms burst-then-silence
     print("  test_compute_objectives_burst_then_silence passed")
 
 
@@ -264,6 +282,11 @@ def test_compute_objectives_silent_population():
     # Both constraints should be infeasible for silent population
     assert constraints[0] <= 0.0  # rate too low
     assert constraints[1] <= 0.0  # fraction too low
+    # features: MeanFiringRateFeature(1) + FractionActiveFeature(1) + FiringRateStabilityFeature(3) = 5
+    assert "CA3.mean_rate" in features.dtype.names
+    assert "CA3.fraction_active" in features.dtype.names
+    assert features[0]["CA3.mean_rate"] == 0.0
+    assert features[0]["CA3.fraction_active"] == 0.0
     print("  test_compute_objectives_silent_population passed")
 
 
@@ -299,6 +322,12 @@ def test_compute_objectives_cross_pop():
     assert objectives.shape == (1,)
     assert constraints.shape == (2,)
     assert all(c > 0.0 for c in constraints)  # all feasible
+    # features: MeanFiringRateFeature(1) + FiringRateStabilityFeature(3) per pop × 2 pops = 8
+    assert len(features.dtype.names) == 8
+    assert "CA3.mean_rate" in features.dtype.names
+    assert "DG.mean_rate" in features.dtype.names
+    assert "CA3.rate_cv" in features.dtype.names
+    assert "DG.rate_cv" in features.dtype.names
     print("  test_compute_objectives_cross_pop passed")
 
 

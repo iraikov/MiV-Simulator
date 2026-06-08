@@ -221,7 +221,7 @@ def optimize_network(
     if resample_fraction < 0.1:
         resample_fraction = 0.1
 
-    feature_dtypes = opt_config.feature_dtypes()
+    feature_dtypes = opt_config.feature_dtypes(target_populations)
     constraint_names = opt_config.constraint_names()
     objective_names_opt = opt_config.objective_names()
 
@@ -420,15 +420,15 @@ def compute_objectives(local_features, operational_config, opt_targets, opt_conf
                 all_features_dict[f"{pop_name}.{fname}"] = fval
 
     objectives = [-obj.compute(all_features_dict) for obj in opt_config.objectives]
-    features = [
-        all_features_dict.get(obj.required_features[0], 0.0)
-        for obj in opt_config.objectives
-    ]
+    feature_dtypes = opt_config.feature_dtypes(target_populations)
+    features = tuple(all_features_dict.get(fname, 0.0) for fname, _ in feature_dtypes)
     constraints = [c.compute(all_features_dict) for c in opt_config.constraints]
 
     result = (
         np.asarray(objectives, dtype=np.float32),
-        np.array([tuple(features)], dtype=np.dtype(opt_config.feature_dtypes())),
+        np.array([features], dtype=np.dtype(feature_dtypes))
+        if feature_dtypes
+        else np.array([]),
         np.asarray(constraints, dtype=np.float32),
     )
     return {0: result}

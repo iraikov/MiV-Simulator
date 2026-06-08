@@ -237,7 +237,9 @@ def test_network_optimization_config():
 
     assert config.objective_names() == ["CA3_target_rate"]
     assert config.constraint_names() == ["CA3_rate_bound"]
-    assert len(config.feature_dtypes()) == 1
+    # feature_dtypes enumerates pop x feature_name - one entry: ("CA3.mean_rate", np.float32)
+    dtypes = config.feature_dtypes(["CA3"])
+    assert dtypes == [("CA3.mean_rate", np.float32)]
 
     # Should be picklable
     config.validate_picklable()

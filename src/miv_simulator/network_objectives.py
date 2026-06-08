@@ -118,9 +118,29 @@ class NetworkOptimizationConfig:
     def constraint_names(self) -> List[str]:
         return [c.name for c in self.constraints]
 
-    def feature_dtypes(self) -> List[tuple]:
-        """[(obj.name, np.float32) for obj in objectives]."""
-        return [(obj.name, np.float32) for obj in self.objectives]
+    def feature_dtypes(
+        self, target_populations: Optional[List[str]] = None
+    ) -> List[tuple]:
+        """
+        Returns [(namespaced_feature_name, np.float32), ...] for all features
+        produced by every NetworkFeature object across all target_populations.
+
+        If target_populations is None, falls back to the populations derived
+        from objectives/constraints via target_populations().
+        """
+        pops = (
+            target_populations
+            if target_populations is not None
+            else self.target_populations()
+        )
+        dtypes: List[tuple] = []
+        for pop in pops:
+            for feature in self.features:
+                if feature.populations is not None and pop not in feature.populations:
+                    continue
+                for fname in feature.feature_names:
+                    dtypes.append((f"{pop}.{fname}", np.float32))
+        return dtypes
 
     def target_populations(self) -> List[str]:
         """Derive unique population names from objectives and constraints."""
