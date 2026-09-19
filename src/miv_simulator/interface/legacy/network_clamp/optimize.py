@@ -31,7 +31,9 @@ class ClampOptimize(Component):
         param_config_name: Optional[str] = None
         param_type: str = "synaptic"
         spike_events_path: Optional[str] = None
-        spike_events_namespace: str = "Spike Events"
+        spike_events_namespaces: List[str] = Field(
+            default_factory=lambda: ["Spike Events"]
+        )
         spike_events_t: str = "t"
         coordinates: str = Field("???")
         distances_namespace: str = ("Arc Distances",)
@@ -76,7 +78,7 @@ class ClampOptimize(Component):
             results_file=None,
             results_path=self.local_directory("data/results", create=True),
             spike_events_path=self.config.spike_events_path,
-            spike_events_namespace=self.config.spike_events_namespace,
+            spike_events_namespaces=self.config.spike_events_namespaces,
             spike_events_t=self.config.spike_events_t,
             coords_path=self.config.coordinates,
             distances_namespace=self.config.distances_namespace,

@@ -26,13 +26,15 @@ from miv_simulator.mechanisms import compile_and_load
 from miv_simulator.utils.neuron import configure_hoc_env, h
 from miv_simulator.stimulus import (
     oscillation_phase_mod_config,
-    rate_maps_from_features,
-    get_2D_arena_spatial_mesh,
-    generate_linear_trajectory,
+    global_oscillation_initial_phases,
     get_equilibration,
-    generate_input_spike_trains,
-    read_stimulus,
 )
+from miv_simulator.input_features import (
+    FEATURE_TYPE_NAMES,
+    constant_rate_vector,
+    generate_constant_rate_spike_train,
+)
+from spike_encoder import EncoderTimeConfig
 from miv_simulator.utils import (
     Context,
     config_logging,
@@ -158,62 +160,89 @@ def init_inputs_from_spikes(
     presyn_sources,
     time_range,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     arena_id,
     stimulus_id,
     spike_train_attr_name="t",
     n_trials=1,
 ):
-    """Initializes presynaptic spike sources from a file with spikes times."""
+    """Initializes presynaptic spike sources from a file with spike times.
+
+    Spike trains are read from each of the given namespaces and, when a
+    presynaptic cell is present in more than one namespace, the train for
+    that cell is the union of all its spike times.
+    """
+    if isinstance(spike_events_namespaces, str):
+        spike_events_namespaces = [spike_events_namespaces]
     populations = sorted(presyn_sources.keys())
 
     equilibration_duration = float(
         env.stimulus_config.get("Equilibration Duration", 0.0)
     )
+    spkdata_time_range = None
     if time_range is not None:
         spkdata_time_range = (
             time_range[0] - equilibration_duration,
             time_range[1],
         )
 
-    if arena_id and stimulus_id:
-        this_spike_events_namespace = (
-            f"{spike_events_namespace} {arena_id} {stimulus_id}"
-        )
-    elif arena_id:
-        this_spike_events_namespace = f"{spike_events_namespace} {arena_id}"
-    else:
-        this_spike_events_namespace = spike_events_namespace
-
     ## Load spike times of presynaptic cells
-    spkdata = spikedata.read_spike_events(
-        spike_events_path,
-        populations,
-        this_spike_events_namespace,
-        spike_train_attr_name=spike_train_attr_name,
-        time_range=spkdata_time_range,
-        n_trials=n_trials,
-        merge_trials=True,
-        comm=env.comm,
-        io_size=env.io_size,
-    )
+    spkindlst = defaultdict(list)
+    spktlst = defaultdict(list)
+    spkpoplst = []
 
-    spkindlst = spkdata["spkindlst"]
-    spktlst = spkdata["spktlst"]
-    spkpoplst = spkdata["spkpoplst"]
+    for spike_events_namespace in spike_events_namespaces:
+        if arena_id and stimulus_id:
+            this_spike_events_namespace = (
+                f"{spike_events_namespace} {arena_id} {stimulus_id}"
+            )
+        elif arena_id:
+            this_spike_events_namespace = f"{spike_events_namespace} {arena_id}"
+        else:
+            this_spike_events_namespace = spike_events_namespace
+
+        spkdata = spikedata.read_spike_events(
+            spike_events_path,
+            populations,
+            this_spike_events_namespace,
+            spike_train_attr_name=spike_train_attr_name,
+            time_range=spkdata_time_range,
+            n_trials=n_trials,
+            merge_trials=True,
+            comm=env.comm,
+            io_size=env.io_size,
+        )
+
+        this_spkindlst = spkdata["spkindlst"]
+        this_spktlst = spkdata["spktlst"]
+        this_spkpoplst = spkdata["spkpoplst"]
+
+        ## Accumulate spike times of each presynaptic population across namespaces
+        for population in populations:
+            if population not in spkpoplst:
+                spkpoplst.append(population)
+            pop_index = list_index(population, this_spkpoplst)
+            if pop_index is None:
+                continue
+            spkindlst[population].append(this_spkindlst[pop_index])
+            spktlst[population].append(this_spktlst[pop_index])
 
     ## Organize spike times by index of presynaptic population and gid
     input_source_dict = {}
     for population in populations:
         pop_index = int(env.Populations[population])
-        spk_pop_index = list_index(population, spkpoplst)
-        if spk_pop_index is None:
+        if population not in spkindlst:
             logger.warning(
                 f"No spikes found for population {population} in file {spike_events_path}"
             )
             continue
-        spk_inds = spkindlst[spk_pop_index]
-        spk_ts = spktlst[spk_pop_index]
+
+        ## Combine the spike times collected from all namespaces
+        spk_inds = np.concatenate(spkindlst[population])
+        spk_ts = np.concatenate(spktlst[population])
+        sort_inds = np.argsort(spk_ts)
+        spk_inds = spk_inds[sort_inds]
+        spk_ts = spk_ts[sort_inds]
 
         spikes_attr_dict = {}
         gid_range = presyn_sources[population]
@@ -246,18 +275,24 @@ def init_inputs_from_features(
     n_trials=1,
     seed=None,
 ):
-    """Initializes presynaptic spike sources from a file with input selectivity features represented as firing rates."""
+    """Initializes presynaptic spike sources from a file with input selectivity
+    features represented as firing rates, using the input_features/spike_encoder
+    on-the-fly generation pipeline."""
 
     logger.info(f"init_inputs_from_features: seed = {seed}")
     populations = sorted(presyn_sources.keys())
 
-    if time_range is not None:
-        if time_range[0] is None:
-            time_range[0] = 0.0
+    if time_range is None:
+        time_range = [0.0, env.tstop]
+    elif time_range[0] is None:
+        time_range[0] = 0.0
 
     equilibration_duration = float(env.stimulus_config["Equilibration Duration"])
-    spatial_resolution = float(env.stimulus_config["Spatial Resolution"])
     temporal_resolution = float(env.stimulus_config["Temporal Resolution"])
+    trial_duration = (time_range[1] - time_range[0]) + equilibration_duration
+    time_config = EncoderTimeConfig(
+        duration_ms=trial_duration, dt_ms=temporal_resolution
+    )
 
     this_input_features_namespaces = [
         f"{input_features_namespace} {arena_id}"
@@ -265,40 +300,9 @@ def init_inputs_from_features(
     ]
 
     input_features_attr_names = [
-        "Selectivity Type",
-        "Num Fields",
-        "Field Width",
-        "Peak Rate",
-        "Module ID",
-        "Grid Spacing",
-        "Grid Orientation",
-        "Field Width Concentration Factor",
-        "X Offset",
-        "Y Offset",
+        "Feature Type",
+        "peak_rate",
     ]
-
-    selectivity_type_names = {i: n for n, i in env.selectivity_types.items()}
-
-    arena = env.stimulus_config["Arena"][arena_id]
-    arena_x, arena_y = get_2D_arena_spatial_mesh(
-        arena=arena, spatial_resolution=spatial_resolution
-    )
-
-    stimulus_spec = arena.trajectories[stimulus_id]
-    t, x, y, d = generate_linear_trajectory(
-        stimulus_spec,
-        temporal_resolution=temporal_resolution,
-        equilibration_duration=equilibration_duration,
-    )
-    if time_range is not None:
-        t_range_inds = np.where(
-            (t <= time_range[1]) & (t >= time_range[0] - equilibration_duration)
-        )[0]
-        t = t[t_range_inds]
-        x = x[t_range_inds]
-        y = y[t_range_inds]
-        d = d[t_range_inds]
-    stimulus = t, x, y, d
 
     equilibrate = get_equilibration(env)
 
@@ -331,28 +335,54 @@ def init_inputs_from_features(
                 comm=env.comm,
             )
             for gid, selectivity_attr_dict in input_features_iter:
+                this_feature_type = int(selectivity_attr_dict["Feature Type"][0])
+                this_feature_type_name = FEATURE_TYPE_NAMES[this_feature_type]
+                if this_feature_type_name != "linear_rate":
+                    raise RuntimeError(
+                        "init_inputs_from_features: feature type "
+                        f"{this_feature_type_name} is not supported; "
+                        "only 'linear_rate' features are currently implemented"
+                    )
+                peak_rate = float(selectivity_attr_dict["peak_rate"][0])
+
                 phase_mod_config = None
                 if phase_mod_config_dict is not None:
                     phase_mod_config = phase_mod_config_dict[gid]
 
-                spikes_attr_dict[gid] = generate_input_spike_trains(
-                    env,
-                    population,
-                    selectivity_type_names,
-                    stimulus,
-                    gid,
-                    selectivity_attr_dict,
-                    equilibrate=equilibrate,
-                    phase_mod_config=phase_mod_config,
-                    spike_train_attr_name=spike_train_attr_name,
-                    n_trials=n_trials,
-                    return_selectivity_features=False,
-                    merge_trials=True,
-                    time_range=time_range,
-                    comm=env.comm,
-                    seed=seed,
+                local_random = np.random.RandomState()
+                gid_seed = (
+                    int(seed)
+                    if seed is not None
+                    else int(env.model_config["Random Seeds"]["Input Spiketrains"])
+                    + gid
                 )
-                spikes_attr_dict[gid][spike_train_attr_name] += equilibration_duration
+                local_random.seed(gid_seed)
+
+                initial_phases = None
+                if (phase_mod_config is not None) and (n_trials > 1):
+                    initial_phases = global_oscillation_initial_phases(env, n_trials)
+
+                trial_spike_times = []
+                for i in range(n_trials):
+                    initial_phase = (
+                        initial_phases[i] if initial_phases is not None else 0.0
+                    )
+                    times = generate_constant_rate_spike_train(
+                        peak_rate,
+                        time_config,
+                        phase_mod_config=phase_mod_config,
+                        initial_phase=initial_phase,
+                        equilibrate=equilibrate,
+                        local_random=local_random,
+                    )
+                    trial_spike_times.append(times + float(i) * trial_duration)
+
+                spike_times = np.asarray(
+                    np.concatenate(trial_spike_times), dtype=np.float32
+                )
+                spike_times += time_range[0]
+
+                spikes_attr_dict[gid] = {spike_train_attr_name: spike_times}
 
         input_source_dict[pop_index] = {"spiketrains": spikes_attr_dict}
 
@@ -367,7 +397,7 @@ def init(
     stimulus_id=None,
     n_trials=1,
     spike_events_path=None,
-    spike_events_namespace="Spike Events",
+    spike_events_namespaces=("Spike Events",),
     spike_train_attr_name="t",
     input_features_path=None,
     input_features_namespaces=None,
@@ -395,6 +425,9 @@ def init(
 
     compile_and_load(directory=env.mechanisms_path)
 
+    if isinstance(spike_events_namespaces, str):
+        spike_events_namespaces = [spike_events_namespaces]
+
     if phase_mod and coords_path is None:
         raise RuntimeError(
             "network_clamp.init: when phase_mod is True, coords_path must be provided"
@@ -415,8 +448,8 @@ def init(
         else:
             t_range = [t_min, t_max]
 
-    ## Attribute namespace that contains recorded spike events
-    namespace_id = spike_events_namespace
+    ## Attribute namespaces that contain recorded spike events
+    namespace_id = list(spike_events_namespaces)
 
     my_cell_index_list = []
     for i, gid in enumerate(cell_index_set):
@@ -523,7 +556,7 @@ def init(
             soma_positions_dict[population] = abs_positions
             del distances
 
-    if env.opsin_config is not None:
+    if hasattr(env, "opsin_config") and env.opsin_config is not None:
         opsin_pop_dict = {
             pop_name: set(env.cells[pop_name].keys()).difference(
                 set(env.artificial_cells[pop_name].keys())
@@ -552,7 +585,7 @@ def init(
             presyn_sources,
             t_range,
             spike_events_path,
-            spike_events_namespace,
+            spike_events_namespaces,
             arena_id,
             stimulus_id,
             spike_train_attr_name,
@@ -871,7 +904,7 @@ def init_state_objfun(
     dataset_prefix,
     results_path,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     spike_events_t,
     input_features_path,
     input_features_namespaces,
@@ -906,7 +939,7 @@ def init_state_objfun(
         stimulus_id,
         n_trials,
         spike_events_path,
-        spike_events_namespace=spike_events_namespace,
+        spike_events_namespaces=spike_events_namespaces,
         spike_train_attr_name=spike_events_t,
         coords_path=coords_path,
         distances_namespace=distances_namespace,
@@ -1029,7 +1062,7 @@ def init_rate_objfun(
     dataset_prefix,
     results_path,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     spike_events_t,
     coords_path,
     distances_namespace,
@@ -1059,7 +1092,7 @@ def init_rate_objfun(
         stimulus_id,
         n_trials,
         spike_events_path=spike_events_path,
-        spike_events_namespace=spike_events_namespace,
+        spike_events_namespaces=spike_events_namespaces,
         spike_train_attr_name=spike_events_t,
         coords_path=coords_path,
         distances_namespace=distances_namespace,
@@ -1269,7 +1302,7 @@ def init_rate_dist_objfun(
     dataset_prefix,
     results_path,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     spike_events_t,
     coords_path,
     distances_namespace,
@@ -1302,7 +1335,7 @@ def init_rate_dist_objfun(
         stimulus_id,
         n_trials,
         spike_events_path,
-        spike_events_namespace=spike_events_namespace,
+        spike_events_namespaces=spike_events_namespaces,
         spike_train_attr_name=spike_events_t,
         coords_path=coords_path,
         distances_namespace=distances_namespace,
@@ -1317,27 +1350,40 @@ def init_rate_dist_objfun(
 
     time_step = env.stimulus_config["Temporal Resolution"]
 
-    target_rate_vector_dict = rate_maps_from_features(
-        env,
-        population,
-        cell_index_set=my_cell_index_set,
-        input_features_path=target_features_path,
-        input_features_namespace=target_features_namespace,
-        time_range=None,
-        arena_id=arena_id,
+    time_range = (0.0, t_max)
+    time_bins = np.arange(time_range[0], time_range[1] + time_step, time_step)
+
+    target_time_config = EncoderTimeConfig(
+        duration_ms=len(time_bins) * time_step, dt_ms=time_step
     )
+    target_features_ns = f"{target_features_namespace} {target_features_arena}"
+    target_features_iter = scatter_read_cell_attribute_selection(
+        (input_features_path if input_features_path is not None else spike_events_path),
+        population,
+        selection=list(my_cell_index_set),
+        namespace=target_features_ns,
+        mask={"Feature Type", "peak_rate"},
+        comm=env.comm,
+    )
+    target_rate_vector_dict = {}
+    for gid, selectivity_attr_dict in target_features_iter:
+        this_feature_type = int(selectivity_attr_dict["Feature Type"][0])
+        this_feature_type_name = FEATURE_TYPE_NAMES[this_feature_type]
+        if this_feature_type_name != "linear_rate":
+            raise RuntimeError(
+                "network_clamp.optimize: target feature type "
+                f"{this_feature_type_name} is not supported; "
+                "only 'linear_rate' features are currently implemented"
+            )
+        peak_rate = float(selectivity_attr_dict["peak_rate"][0])
+        target_rate_vector_dict[gid] = constant_rate_vector(
+            peak_rate, target_time_config
+        )
+
     for gid, target_rate_vector in target_rate_vector_dict.items():
         target_rate_vector[
             np.isclose(target_rate_vector, 0.0, atol=1e-3, rtol=1e-3)
         ] = 0.0
-
-    trj_d, trj_t = read_stimulus(
-        (input_features_path if input_features_path is not None else spike_events_path),
-        target_features_arena,
-        target_features_stimulus,
-    )
-    time_range = (0.0, min(np.max(trj_t), t_max))
-    time_bins = np.arange(time_range[0], time_range[1] + time_step, time_step)
 
     opt_param_config = optimization_params(
         env.netclamp_config.optimize_parameters,
@@ -1671,7 +1717,7 @@ def dist_run(
     arena_id = init_params["arena_id"]
     stimulus_id = init_params["stimulus_id"]
     spike_events_path = init_params["spike_events_path"]
-    spike_events_namespace = init_params["spike_events_namespace"]
+    spike_events_namespaces = init_params["spike_events_namespaces"]
     spike_events_t = init_params["spike_events_t"]
     coords_path = init_params["coords_path"]
     distances_namespace = init_params["distances_namespace"]
@@ -1692,7 +1738,7 @@ def dist_run(
         stimulus_id,
         n_trials,
         spike_events_path,
-        spike_events_namespace=spike_events_namespace,
+        spike_events_namespaces=spike_events_namespaces,
         coords_path=coords_path,
         distances_namespace=distances_namespace,
         phase_mod=phase_mod,
@@ -1785,7 +1831,7 @@ def show(
     dataset_prefix,
     results_path,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     spike_events_t,
     input_features_path,
     input_features_namespaces,
@@ -1820,7 +1866,7 @@ def show(
             arena_id,
             stimulus_id,
             spike_events_path=spike_events_path,
-            spike_events_namespace=spike_events_namespace,
+            spike_events_namespaces=spike_events_namespaces,
             spike_train_attr_name=spike_events_t,
             input_features_path=input_features_path,
             input_features_namespaces=input_features_namespaces,
@@ -1853,7 +1899,7 @@ def go(
     mechanisms_path,
     dataset_prefix,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     spike_events_t,
     coords_path,
     distances_namespace,
@@ -2002,7 +2048,7 @@ def go(
             stimulus_id,
             n_trials,
             spike_events_path,
-            spike_events_namespace=spike_events_namespace,
+            spike_events_namespaces=spike_events_namespaces,
             spike_train_attr_name=spike_events_t,
             coords_path=coords_path,
             distances_namespace=distances_namespace,
@@ -2060,7 +2106,7 @@ def optimize(
     results_file,
     results_path,
     spike_events_path,
-    spike_events_namespace,
+    spike_events_namespaces,
     spike_events_t,
     coords_path,
     distances_namespace,
@@ -2154,7 +2200,7 @@ def optimize(
             stimulus_id,
             n_trials,
             spike_events_path,
-            spike_events_namespace=spike_events_namespace,
+            spike_events_namespaces=spike_events_namespaces,
             spike_train_attr_name=spike_events_t,
             coords_path=coords_path,
             distances_namespace=distances_namespace,
