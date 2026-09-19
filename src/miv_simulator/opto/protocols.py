@@ -246,9 +246,7 @@ class ProtSinusoid(Protocol):
 
         self.t_start, self.t_end = 0, self.Dt_total
         self.phi_ts = self.genPulseSet()
-        self.runLabels = [
-            r"$f={}\mathrm{{Hz}}$ ".format(round_sig(f, 3)) for f in self.fs
-        ]
+        self.runLabels = [r"$f={}\mathrm{{Hz}}$ ".format(round(f, 3)) for f in self.fs]
 
     def getShortestPeriod(self):
         return 1000 / self.sr  # dt [ms]
@@ -348,7 +346,6 @@ class ProtDelta(Protocol):
         self.phis.sort(reverse=True)
         self.nPhis = len(self.phis)
 
-        self.addStimulus = config.addStimulus
         self.extraPrep()
         return
 
@@ -485,7 +482,7 @@ default_protocol_parameters["custom"] = make_param_dict(
         0,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  #'photons/s/mm^2'
     (
@@ -515,7 +512,7 @@ default_protocol_parameters["step"] = make_param_dict(
         0,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  #'photons/s/mm^2'
     (
@@ -545,7 +542,7 @@ default_protocol_parameters["sinusoid"] = make_param_dict(
         0,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  #'photons/s/mm^2'
     (
@@ -554,7 +551,7 @@ default_protocol_parameters["sinusoid"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\phi_0",
+        "\\phi_0",
         "Constant offset for flux",
     ),  #'photons/s/mm^2'
     (
@@ -563,7 +560,7 @@ default_protocol_parameters["sinusoid"] = make_param_dict(
         False,
         True,
         1,
-        "\phi_{t=0}>0",
+        "\\phi_{t=0}>0",
         "Start at maximum flux (else minimum)",
     ),
     (
@@ -572,7 +569,7 @@ default_protocol_parameters["sinusoid"] = make_param_dict(
         0,
         None,
         pq.Hz,
-        "\mathbf{f}",
+        "\\mathbf{f}",
         "List of modulation frequencies",
     ),  #'pq.Hz' #50, 100, 500, 1000
     (
@@ -602,7 +599,7 @@ default_protocol_parameters["chirp"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  # 'photons/s/mm^2'
     (
@@ -611,7 +608,7 @@ default_protocol_parameters["chirp"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\phi_0",
+        "\\phi_0",
         "Constant offset for flux",
     ),  # 'photons/s/mm^2'
     (
@@ -629,7 +626,7 @@ default_protocol_parameters["chirp"] = make_param_dict(
         False,
         True,
         1,
-        "\phi_{t=0}>0",
+        "\\phi_{t=0}>0",
         "Start at maximum flux (else minimum)",
     ),
     (
@@ -661,7 +658,7 @@ default_protocol_parameters["ramp"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  # 'photons/s/mm^2' #1e12,1e13,1e14,1e15,
     (
@@ -670,7 +667,7 @@ default_protocol_parameters["ramp"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\phi_0",
+        "\\phi_0",
         "Constant offset for flux",
     ),  # 'photons/s/mm^2'
     (
@@ -700,7 +697,7 @@ default_protocol_parameters["delta"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  # 'photons/s/mm^2'
     (
@@ -739,7 +736,7 @@ default_protocol_parameters["rectifier"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  # 'photons/s/mm^2' # Change to 1e17?
     (
@@ -769,7 +766,7 @@ default_protocol_parameters["shortPulse"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  # 'photons/s/mm^2' #1e12
     (
@@ -808,7 +805,7 @@ default_protocol_parameters["recovery"] = make_param_dict(
         None,
         None,
         pq.mole * pq.mm**-2 * pq.second**-1,
-        "\mathbf{\phi}",
+        "\\mathbf{\\phi}",
         "List of flux values",
     ),  # 'photons/s/mm^2'
     (
