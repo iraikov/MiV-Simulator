@@ -20,6 +20,8 @@ from neuroh5.io import (
     append_cell_attributes,
     append_cell_trees,
     read_cell_attribute_info,
+    read_cell_attributes,
+    read_population_ranges,
     scatter_read_cell_attribute_selection,
     scatter_read_graph_selection,
     scatter_read_tree_selection,
@@ -972,6 +974,92 @@ def write_connection_selection(
     return input_sources
 
 
+def read_soma_distances(
+    env: AbstractEnv,
+    comm,
+    distances_namespace: str,
+    gid_filter=None,
+    populations=None,
+):
+    """
+    Reads the U and V arc distance attributes of every cell in each
+    population from the dataset file.
+
+    The reads and the computation of per-population ranges are performed on
+    rank zero only; all other ranks receive empty results.
+
+    :param env: an instance of the `Env` class
+    :param comm: MPI communicator of the current run
+    :param distances_namespace: namespace containing the arc distance attributes
+    :param gid_filter: optional callable; a gid is kept only if `gid_filter(gid)` is true
+    :param populations: iterable of populations to read; defaults to all populations in the connectivity file
+    :return: (distance_U_dict, distance_V_dict, range_U_dict, range_V_dict);
+        the distance dictionaries map population name to {gid: distance}
+    """
+
+    rank = comm.rank
+
+    comm0 = env.comm.Split(2 if rank == 0 else 0, 0)
+
+    if populations is None:
+        pop_ranges, _ = read_population_ranges(env.connectivity_file_path, comm=comm)
+        populations = [population for population in pop_ranges]
+
+    distance_U_dict = {}
+    distance_V_dict = {}
+    range_U_dict = {}
+    range_V_dict = {}
+
+    if rank == 0:
+        for population in populations:
+            distances = read_cell_attributes(
+                env.data_file_path,
+                population,
+                namespace=distances_namespace,
+                comm=comm0,
+            )
+            soma_distances = {
+                k: (v["U Distance"][0], v["V Distance"][0]) for (k, v) in distances
+            }
+            del distances
+
+            if gid_filter is not None:
+                soma_distances = {
+                    gid: uv for (gid, uv) in soma_distances.items() if gid_filter(gid)
+                }
+
+            numitems = len(soma_distances)
+            logger.info("read %s distances (%i elements)" % (population, numitems))
+
+            if numitems == 0:
+                continue
+
+            distance_U_array = np.asarray(
+                [soma_distances[gid][0] for gid in soma_distances]
+            )
+            distance_V_array = np.asarray(
+                [soma_distances[gid][1] for gid in soma_distances]
+            )
+
+            range_U_dict[population] = (
+                float(np.min(distance_U_array)),
+                float(np.max(distance_U_array)),
+            )
+            range_V_dict[population] = (
+                float(np.min(distance_V_array)),
+                float(np.max(distance_V_array)),
+            )
+
+            distance_U_dict[population] = {
+                gid: soma_distances[gid][0] for gid in soma_distances
+            }
+            distance_V_dict[population] = {
+                gid: soma_distances[gid][1] for gid in soma_distances
+            }
+
+    return distance_U_dict, distance_V_dict, range_U_dict, range_V_dict
+
+
 def write_input_cell_selection(
     env: AbstractEnv,
     input_sources,
@@ -982,8 +1070,16 @@ def write_input_cell_selection(
     """
     Writes out predefined spike trains when only a subset of the network is instantiated.
 
+    The spike trains of each input population are read from every namespace
+    listed in `env.spike_input_namespaces` for which the given population has
+    spike train data, and the trains collected from each namespace are written
+    to a namespace of the same name in the selection file.
+
     :param env: an instance of the `Env` class
     :param input_sources: a dictionary of the form { pop_name, gid_sources }
+    :param write_selection_file_path: path of the selection file to write
+    :param populations: populations to process; defaults to all cell populations
+    :param write_kwds: optional keyword arguments passed to the neuroh5 write functions
     """
 
     if "comm" not in write_kwds:
@@ -1007,8 +1103,6 @@ def write_input_cell_selection(
         if pop_name not in pop_names:
             continue
 
-        spikes_output_dict = {}
-
         if (env.cell_selection is not None) and (pop_name in env.cell_selection):
             local_gid_range = gid_range.difference(set(env.cell_selection[pop_name]))
         else:
@@ -1021,46 +1115,43 @@ def write_input_cell_selection(
             if i % nhosts == rank:
                 this_gid_range.add(gid)
 
-        has_spike_train = False
-        spike_input_source_loc = []
-        if (env.spike_input_attribute_info is not None) and (
-            len(env.spike_input_namespaces) > 0
-        ):
-            if (pop_name in env.spike_input_attribute_info) and (
-                set(env.spike_input_namespaces).intersection(
-                    set(env.spike_input_attribute_info[pop_name].keys())
-                )
+        # Map each input spike namespace to the paths of the files that
+        # contain spike train data for it; the spike input file takes
+        # precedence over the dataset file.
+        spike_input_source_loc = defaultdict(set)
+        if env.spike_input_namespaces:
+            spike_input_namespaces = env.spike_input_namespaces
+            if isinstance(spike_input_namespaces, str):
+                spike_input_namespaces = [spike_input_namespaces]
+            if (env.spike_input_attribute_info is not None) and (
+                pop_name in env.spike_input_attribute_info
             ):
-                has_spike_train = True
-                for ns in env.spike_input_namespaces:
-                    spike_input_source_loc.append((env.spike_input_path, ns))
-        if (env.cell_attribute_info is not None) and (
-            len(env.spike_input_namespaces) > 0
-        ):
-            if (pop_name in env.cell_attribute_info) and (
-                set(env.spike_input_namespaces).intersection(
-                    set(env.cell_attribute_info[pop_name].keys())
-                )
+                for ns in spike_input_namespaces:
+                    if ns in env.spike_input_attribute_info[pop_name]:
+                        spike_input_source_loc[ns].add(env.spike_input_path)
+            if (env.cell_attribute_info is not None) and (
+                pop_name in env.cell_attribute_info
             ):
-                has_spike_train = True
-                for ns in env.spike_input_namespaces:
-                    spike_input_source_loc.append((input_file_path, ns))
+                for ns in spike_input_namespaces:
+                    if ns in env.cell_attribute_info[pop_name]:
+                        spike_input_source_loc[ns].add(input_file_path)
 
         if rank == 0:
             logger.info(
-                "*** Reading spike trains for population %s: %d cells: has_spike_train = %s"
-                % (pop_name, len(this_gid_range), str(has_spike_train))
+                "*** Reading spike trains for population %s: %d cells: namespaces = %s"
+                % (pop_name, len(this_gid_range), str(list(spike_input_source_loc)))
             )
 
-        if has_spike_train:
-            vecstim_attr_set = {"t"}
-            if env.spike_input_attr is not None:
-                vecstim_attr_set.add(env.spike_input_attr)
-            if "spike train" in env.celltypes[pop_name]:
-                vecstim_attr_set.add(
-                    env.celltypes[pop_name]["spike train"]["attribute"]
-                )
+        vecstim_attr_set = {"t"}
+        if env.spike_input_attr is not None:
+            vecstim_attr_set.add(env.spike_input_attr)
+        if "spike train" in env.celltypes[pop_name]:
+            vecstim_attr_set.add(env.celltypes[pop_name]["spike train"]["attribute"])
 
+        # The spike trains of a cell that is present in several source files
+        # of the same namespace are merged into a single train.
+        for input_ns, input_paths in sorted(spike_input_source_loc.items()):
+            spikes_output_dict = {}
             cell_spikes_iters = [
                 scatter_read_cell_attribute_selection(
                     input_path,
@@ -1071,26 +1162,25 @@ def write_input_cell_selection(
                     comm=env.comm,
                     io_size=env.io_size,
                 )
-                for (input_path, input_ns) in spike_input_source_loc
+                for input_path in sorted(input_paths)
             ]
 
             for cell_spikes_iter in cell_spikes_iters:
                 spikes_output_dict.update(dict(list(cell_spikes_iter)))
 
-        if rank == 0:
-            logger.info(
-                "*** Writing spike trains for population {}: {}".format(
-                    pop_name, str(spikes_output_dict)
+            if len(spikes_output_dict) > 0:
+                if rank == 0:
+                    logger.info(
+                        "*** Writing spike trains for population %s namespace %s: %d cells"
+                        % (pop_name, input_ns, len(spikes_output_dict))
+                    )
+                write_cell_attributes(
+                    write_selection_file_path,
+                    pop_name,
+                    spikes_output_dict,
+                    namespace=input_ns,
+                    **write_kwds,
                 )
-            )
-
-        write_cell_attributes(
-            write_selection_file_path,
-            pop_name,
-            spikes_output_dict,
-            namespace=env.spike_input_namespaces[0],
-            **write_kwds,
-        )
 
 
 def query_cell_attributes(input_file, population_names, namespace_ids=None):

@@ -1,9 +1,12 @@
+"""
+Cuts a slice of the network by arc distance from the temporal pole, and
+writes the gid selection of the resulting slice to a YAML file.
+"""
+
 import os
 import sys
-from collections import defaultdict
 
 import click
-import numpy as np
 import yaml
 
 from miv_simulator import utils
@@ -11,7 +14,7 @@ from miv_simulator.env import Env
 from miv_simulator.utils import io as io_utils
 
 from mpi4py import MPI
-from neuroh5.io import read_cell_attributes, read_population_ranges
+from neuroh5.io import read_population_ranges
 
 
 def mpi_excepthook(type, value, traceback):
@@ -40,7 +43,12 @@ sys.excepthook = mpi_excepthook
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     help="path to directory containing required neuroh5 data files",
 )
-@click.option("--coordinates-namespace", "-n", type=str, default="Coordinates")
+@click.option(
+    "--coordinates-namespace",
+    type=str,
+    default="Coordinates",
+    help="namespace containing soma coordinates",
+)
 @click.option("--distances-namespace", "-n", type=str, default="Arc Distances")
 @click.option("--distance-limits", type=(float, float))
 @click.option(
@@ -87,7 +95,11 @@ def main(
     verbose,
 ):
     """
-    cut_slice
+    Cuts a slice of the network containing cells whose U arc distance from
+    the temporal pole is within the given distance limits, and writes the
+    gid selection of the slice to a YAML file. If --write-selection is
+    specified, a neuroh5 selection file is also generated, including spike
+    trains and connection data of the selected cells.
     """
 
     utils.config_logging(verbose)
@@ -116,54 +128,22 @@ def main(
 
     pop_ranges, pop_size = read_population_ranges(env.connectivity_file_path, comm=comm)
 
-    distance_U_dict = {}
-    distance_V_dict = {}
-    range_U_dict = {}
-    range_V_dict = {}
+    distance_U_dict, distance_V_dict, range_U_dict, range_V_dict = (
+        io_utils.read_soma_distances(
+            env,
+            comm,
+            distances_namespace,
+            populations=pop_ranges,
+        )
+    )
 
-    selection_dict = defaultdict(set)
-
-    comm0 = env.comm.Split(2 if rank == 0 else 0, 0)
-
+    selection_dict = {}
     if rank == 0:
         for population in pop_ranges:
-            distances = read_cell_attributes(
-                env.data_file_path,
-                population,
-                namespace=distances_namespace,
-                comm=comm0,
-            )
-            soma_distances = {
-                k: (v["U Distance"][0], v["V Distance"][0]) for (k, v) in distances
-            }
-            del distances
-
-            numitems = len(list(soma_distances.keys()))
-            logger.info("read %s distances (%i elements)" % (population, numitems))
-
-            if numitems == 0:
+            if population not in distance_U_dict:
                 continue
-
-            distance_U_array = np.asarray(
-                [soma_distances[gid][0] for gid in soma_distances]
-            )
-            distance_V_array = np.asarray(
-                [soma_distances[gid][1] for gid in soma_distances]
-            )
-
-            U_min = np.min(distance_U_array)
-            U_max = np.max(distance_U_array)
-            V_min = np.min(distance_V_array)
-            V_max = np.max(distance_V_array)
-
-            range_U_dict[population] = (U_min, U_max)
-            range_V_dict[population] = (V_min, V_max)
-
-            distance_U = {gid: soma_distances[gid][0] for gid in soma_distances}
-            distance_V = {gid: soma_distances[gid][1] for gid in soma_distances}
-
-            distance_U_dict[population] = distance_U
-            distance_V_dict[population] = distance_V
+            distance_U = distance_U_dict[population]
+            U_min, U_max = range_U_dict[population]
 
             min_dist = U_min
             max_dist = U_max
@@ -172,20 +152,16 @@ def main(
                 max_dist = distance_limits[1]
 
             selection_dict[population] = {
-                k
-                for k in distance_U
-                if (distance_U[k] >= min_dist) and (distance_U[k] <= max_dist)
+                gid
+                for gid in distance_U
+                if (distance_U[gid] >= min_dist) and (distance_U[gid] <= max_dist)
             }
 
-        yaml_output_dict = {}
-        for k, v in selection_dict.items():
-            yaml_output_dict[k] = list(v)
+        yaml_output_dict = {k: sorted(v) for k, v in selection_dict.items()}
 
         yaml_output_path = f"{output_path}/DG_slice.yaml"
         with open(yaml_output_path, "w") as outfile:
             yaml.dump(yaml_output_dict, outfile)
-
-        del yaml_output_dict
 
     env.comm.barrier()
 
@@ -194,7 +170,7 @@ def main(
         if rank == 0:
             io_utils.mkout(env, write_selection_file_path)
         env.comm.barrier()
-        selection_dict = env.comm.bcast(dict(selection_dict), root=0)
+        selection_dict = env.comm.bcast(selection_dict, root=0)
         env.cell_selection = selection_dict
         io_utils.write_cell_selection(env, write_selection_file_path)
         input_selection = io_utils.write_connection_selection(
