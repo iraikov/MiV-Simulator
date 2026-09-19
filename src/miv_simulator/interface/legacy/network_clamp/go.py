@@ -25,7 +25,9 @@ class ClampGo(Component):
         mechanisms_path: str = "."
         dataset_path: Optional[str] = None
         spike_events_path: Optional[str] = None
-        spike_events_namespace: str = "Spike Events"
+        spike_events_namespaces: List[str] = Field(
+            default_factory=lambda: ["Spike Events"]
+        )
         spike_events_t: str = "t"
         coordinates: str = Field("???")
         distances_namespace: str = ("Arc Distances",)
@@ -62,7 +64,7 @@ class ClampGo(Component):
             mechanisms_path=self.config.mechanisms_path,
             dataset_prefix=self.config.dataset_path,
             spike_events_path=self.config.spike_events_path,
-            spike_events_namespace=self.config.spike_events_namespace,
+            spike_events_namespaces=self.config.spike_events_namespaces,
             spike_events_t=self.config.spike_events_t,
             coords_path=self.config.coordinates,
             distances_namespace=self.config.distances_namespace,

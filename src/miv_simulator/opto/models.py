@@ -1,8 +1,8 @@
 """
 Rhodopsin model class and functions
-    * Three-state model :math:`\{C, O, D\}`
-    * Four-state model :math:`\{C_1, O_1, O_2, C_2\}`
-    * Six-state model :math:`\{C_1, I_1, O_1, O_2, I_2, C_2\}`
+    * Three-state model :math:`\\{C, O, D\\}`
+    * Four-state model :math:`\\{C_1, O_1, O_2, C_2\\}`
+    * Six-state model :math:`\\{C_1, I_1, O_1, O_2, I_2, C_2\\}`
 Based on code from the PyRhO: A Multiscale Optogenetics Simulation Platform
 https://github.com/ProjectPyRhO/PyRhO.git
 """
@@ -192,6 +192,8 @@ class RhodopsinModel(Struct):
     def plotActivation(
         self, actFunc, label=None, phis=np.logspace(12, 21, 1001), ax=None
     ):
+        import matplotlib.pyplot as plt
+
         if ax is None:
             ax = plt.gca()
         else:
@@ -203,8 +205,8 @@ class RhodopsinModel(Struct):
         else:
             ax.plot(phis, actFunc(phis))
         ax.set_xscale("log")
-        ax.set_xlabel(r"$\phi \ \mathrm{[photons \cdot mm^{-2} \cdot s^{-1}]}$")
-        ax.set_ylabel(r"$\mathrm{Transition\ rate \ [ms^{-1}]}$")
+        ax.set_xlabel(r"$\\phi \ \\mathrm{[photons \\cdot mm^{-2} \\cdot s^{-1}]}$")
+        ax.set_ylabel(r"$\\mathrm{Transition\\ rate \\ [ms^{-1}]}$")
         return
 
 
@@ -249,32 +251,33 @@ class RhO_3states(RhodopsinModel):
 
     # TODO: Try using \begin{align*} now this is a raw string, or leave a comment if it does not work
     equations = r"""
-                $$ \dot{C} = G_{r}(\phi)D - G_{a}(\phi)C $$
-                $$ \dot{O} = G_{a}(\phi)C - G_{d}O $$
-                $$ \dot{D} = G_{d}O - G_{r}(\phi)D $$
+                $$ \dot{C} = G_{r}(\\phi)D - G_{a}(\\phi)C $$
+                $$ \dot{O} = G_{a}(\\phi)C - G_{d}O $$
+                $$ \dot{D} = G_{d}O - G_{r}(\\phi)D $$
                 $$ C + O + D = 1 $$
                 $$ $$
-                $$ G_a(\phi) = k_a\frac{\phi^p}{\phi^p + \phi_m^p} $$
-                $$ G_r(\phi) = k_r\frac{\phi^q}{\phi^q + \phi_m^q} + G_{r0} $$
+                $$ G_a(\\phi) = k_a\frac{\\phi^p}{\\phi^p + \\phi_m^p} $$
+                $$ G_r(\\phi) = k_r\frac{\\phi^q}{\\phi^q + \\phi_m^q} + G_{r0} $$
                 $$ $$
-                $$ f_{\phi}(\phi) = O \qquad \qquad $$
+                $$ f_{\\phi}(\\phi) = O \qquad \qquad $$
                 $$ f_v(v) = v_1\frac{1-e^{-(v-E)/v_0}}{(v-E)} $$
-                $$ I_{\phi} = g_0 \cdot f_{\phi}(\phi) \cdot f_v(v) \cdot (v-E) $$
+                $$ I_{\\phi} = g_0 \\cdot f_{\\phi}(\\phi) \\cdot f_v(v) \\cdot (v-E) $$
                 """
 
     _latex = [
-        r"$\dot{C} = G_{r}(\phi)D - G_{a}(\phi)C$",
-        r"$\dot{O} = G_{a}(\phi)C - G_{d}O$",
-        r"$\dot{D} = G_{d}O - G_{r}(\phi)D$",
+        r"$\dot{C} = G_{r}(\\phi)D - G_{a}(\\phi)C$",
+        r"$\dot{O} = G_{a}(\\phi)C - G_{d}O$",
+        r"$\dot{D} = G_{d}O - G_{r}(\\phi)D$",
         r"$C + O + D = 1$",
-        r"$G_a(\phi) = k\\frac{\phi^p}{\phi^p + \phi_m^p}$",
-        r"$G_r(\phi) = \mathcal{H}(\phi) \cdot G_{r1} + G_{r0}$",
-        r"$f_{\phi}(\phi) = O$" r"$f_v(v) = \\frac{1-\\exp({-(v-E)/v_0})}{(v-E)/v_1}$",
-        r"$I_{\phi} = g_0 \cdot f_{\phi}(\phi) \cdot f_v(v) \cdot (v-E)$",
+        r"$G_a(\\phi) = k\\frac{\\phi^p}{\\phi^p + \\phi_m^p}$",
+        r"$G_r(\\phi) = \mathcal{H}(\\phi) \\cdot G_{r1} + G_{r0}$",
+        r"$f_{\\phi}(\\phi) = O$"
+        r"$f_v(v) = \\frac{1-\\exp({-(v-E)/v_0})}{(v-E)/v_1}$",
+        r"$I_{\\phi} = g_0 \\cdot f_{\\phi}(\\phi) \\cdot f_v(v) \\cdot (v-E)$",
     ]
 
-    eqIss = r"""$I_{SS} = \bar{g_0} \cdot \frac{G_a \cdot G_r}{G_d \cdot (G_r + G_a) + G_a \cdot G_r} \cdot (v-E)
-    = \bar{g_0} \cdot \frac{\tau_d}{\tau_d + \tau_r + \tau_\phi} \cdot (v-E)$"""
+    eqIss = r"""$I_{SS} = \bar{g_0} \\cdot \frac{G_a \\cdot G_r}{G_d \\cdot (G_r + G_a) + G_a \\cdot G_r} \\cdot (v-E)
+    = \bar{g_0} \\cdot \frac{\tau_d}{\tau_d + \tau_r + \tau_\\phi} \\cdot (v-E)$"""
 
     def _calcGa(self, phi):
         return self.k_a * phi**self.p / (phi**self.p + self.phi_m**self.p)
@@ -310,7 +313,8 @@ class RhO_3states(RhodopsinModel):
 
         if phi_t is not None:
             self.setLight(float(phi_t(t)))
-        C, O, D = s_0  # Split state vector into individual variables
+        # Split state vector into individual variables
+        C, O, D = s_0  # noqa: E741
         dCdt = -self.Ga * C + self.Gr * D  # C'
         dOdt = self.Ga * C - self.Gd * O  # O'
         dDdt = self.Gd * O - self.Gr * D  # D'
@@ -345,7 +349,7 @@ class RhO_3states(RhodopsinModel):
     def calcfphi(self, states=None):
         if states is None:
             states = self.states
-        C, O, D = states.T
+        C, O, D = states.T  # noqa: E741
         return O
 
     # def calcOn(self,t):
@@ -403,7 +407,7 @@ class RhO_3states(RhodopsinModel):
             - Z_2 * lambda_1 * (lambda_2 - Gd - Gr) * Exp_2
             + (RSD * Gd**2 * Gr * (C_0 + D_0 + O_0))
         ) / (Gd * SP * RSD)
-        O = (
+        O = (  # noqa: E741
             -Z_1 * lambda_2 * (lambda_1 - Gr) * Exp_1
             + Z_2 * lambda_1 * (lambda_2 - Gr) * Exp_2
             + (RSD * Ga * Gd * Gr * (C_0 + D_0 + O_0))
@@ -470,20 +474,20 @@ class RhO_4states(RhodopsinModel):
     connect = [[0, 1, 0, 0], [1, 0, 1, 0], [0, 1, 0, 1], [1, 0, 1, 0]]
 
     equations = r"""
-                $$ \dot{C_1} = G_{d1}O_1 + G_{r0}C_2 - G_{a1}(\phi)C_1 $$
-                $$ \dot{O_1} = G_{a1}(\phi)C_1 + G_{b}(\phi)O_2 - (G_{d1} + G_{f}(\phi))O_1 $$
-                $$ \dot{O_2} = G_{a2}(\phi)C_2 + G_{f}(\phi)O_1 - (G_{d2} + G_{b}(\phi))O_2 $$
-                $$ \dot{C_2} = G_{d2}O_2 - (G_{r0} + G_{a2}(\phi))C_2 $$
+                $$ \dot{C_1} = G_{d1}O_1 + G_{r0}C_2 - G_{a1}(\\phi)C_1 $$
+                $$ \dot{O_1} = G_{a1}(\\phi)C_1 + G_{b}(\\phi)O_2 - (G_{d1} + G_{f}(\\phi))O_1 $$
+                $$ \dot{O_2} = G_{a2}(\\phi)C_2 + G_{f}(\\phi)O_1 - (G_{d2} + G_{b}(\\phi))O_2 $$
+                $$ \dot{C_2} = G_{d2}O_2 - (G_{r0} + G_{a2}(\\phi))C_2 $$
                 $$ C_1 + O_1 + O_2 + C_2 = 1 $$
                 $$$$
-                $$ G_{a1}(\phi) = k_1 \frac{\phi^p}{\phi^p + \phi_m^p} $$
-                $$ G_{f}(\phi)  = k_{f} \frac{\phi^q}{\phi^q + \phi_m^q} + G_{f0} $$
-                $$ G_{b}(\phi)  = k_{b} \frac{\phi^q}{\phi^q + \phi_m^q} + G_{b0} $$
-                $$ G_{a2}(\phi) = k_2 \frac{\phi^p}{\phi^p + \phi_m^p} $$
+                $$ G_{a1}(\\phi) = k_1 \frac{\\phi^p}{\\phi^p + \\phi_m^p} $$
+                $$ G_{f}(\\phi)  = k_{f} \frac{\\phi^q}{\\phi^q + \\phi_m^q} + G_{f0} $$
+                $$ G_{b}(\\phi)  = k_{b} \frac{\\phi^q}{\\phi^q + \\phi_m^q} + G_{b0} $$
+                $$ G_{a2}(\\phi) = k_2 \frac{\\phi^p}{\\phi^p + \\phi_m^p} $$
                 $$$$
-                $$ f_{\phi}(\phi) = O_1+\gamma O_2 $$
+                $$ f_{\\phi}(\\phi) = O_1+\gamma O_2 $$
                 $$ f_v(v) = v_1\frac{1-e^{-(v-E)/v_0}}{(v-E)} $$
-                $$ I_{\phi} = g_0 \cdot f_{\phi}(\phi) \cdot f_v(v) \cdot (v-E) $$
+                $$ I_{\\phi} = g_0 \\cdot f_{\\phi}(\\phi) \\cdot f_v(v) \\cdot (v-E) $$
                 """
 
     def _calcGa1(self, phi):
@@ -673,22 +677,22 @@ class RhO_6states(RhodopsinModel):
     ]
 
     equations = r"""
-                $$ \dot{C_1} = G_{d1}O_1 + G_{r0}C_2 - G_{a1}(\phi)C_1 $$
-                $$ \dot{I_1} = G_{a1}(\phi)C_1 - G_{o1}I_1 $$
-                $$ \dot{O_1} = G_{o1}I_1 + G_{b}(\phi)O_2 - (G_{d1} + G_{f}(\phi))O_1 $$
-                $$ \dot{O_2} = G_{o2}I_2 + G_{f}(\phi)O_1 - (G_{d2} + G_{b}(\phi))O_2 $$
-                $$ \dot{I_2} = G_{a2}(\phi)C_2 - G_{o2}I_2 $$
-                $$ \dot{C_2} = G_{d2}O_2 - (G_{r0} + G_{a2}(\phi))C_2 $$
+                $$ \dot{C_1} = G_{d1}O_1 + G_{r0}C_2 - G_{a1}(\\phi)C_1 $$
+                $$ \dot{I_1} = G_{a1}(\\phi)C_1 - G_{o1}I_1 $$
+                $$ \dot{O_1} = G_{o1}I_1 + G_{b}(\\phi)O_2 - (G_{d1} + G_{f}(\\phi))O_1 $$
+                $$ \dot{O_2} = G_{o2}I_2 + G_{f}(\\phi)O_1 - (G_{d2} + G_{b}(\\phi))O_2 $$
+                $$ \dot{I_2} = G_{a2}(\\phi)C_2 - G_{o2}I_2 $$
+                $$ \dot{C_2} = G_{d2}O_2 - (G_{r0} + G_{a2}(\\phi))C_2 $$
                 $$ C_1 + I_1 + O_1 + O_2 + I_2 + C_2 = 1 $$
                 $$$$
-                $$ G_{a1}(\phi) = k_{1} \frac{\phi^p}{\phi^p + \phi_m^p} $$
-                $$ G_{f}(\phi)  = k_{f} \frac{\phi^q}{\phi^q + \phi_m^q} + G_{f0} $$
-                $$ G_{b}(\phi)  = k_{b} \frac{\phi^q}{\phi^q + \phi_m^q} + G_{b0} $$
-                $$ G_{a2}(\phi) = k_{2} \frac{\phi^p}{\phi^p + \phi_m^p} $$
+                $$ G_{a1}(\\phi) = k_{1} \frac{\\phi^p}{\\phi^p + \\phi_m^p} $$
+                $$ G_{f}(\\phi)  = k_{f} \frac{\\phi^q}{\\phi^q + \\phi_m^q} + G_{f0} $$
+                $$ G_{b}(\\phi)  = k_{b} \frac{\\phi^q}{\\phi^q + \\phi_m^q} + G_{b0} $$
+                $$ G_{a2}(\\phi) = k_{2} \frac{\\phi^p}{\\phi^p + \\phi_m^p} $$
                 $$$$
-                $$ f_{\phi}(\phi) = O_1+\gamma O_2 $$
+                $$ f_{\\phi}(\\phi) = O_1+\gamma O_2 $$
                 $$ f_v(v) = v_1\frac{1-e^{-(v-E)/v_0}}{(v-E)} $$
-                $$ I_{\phi} = g_0 \cdot f_{\phi}(\phi) \cdot f_v(v) \cdot (v-E) $$
+                $$ I_{\\phi} = g_0 \\cdot f_{\\phi}(\\phi) \\cdot f_v(v) \\cdot (v-E) $$
                 """
 
     def _calcGa1(self, phi):

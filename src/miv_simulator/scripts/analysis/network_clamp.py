@@ -73,14 +73,14 @@ def cli():
 )
 @click.option(
     "--spike-events-path",
-    "-s",
     type=click.Path(exists=True, dir_okay=False, file_okay=True),
     help="path to neuroh5 file containing spike times",
 )
 @click.option(
     "--spike-events-namespace",
+    multiple=True,
     type=str,
-    default="Spike Events",
+    default=("Spike Events",),
     help="namespace containing spike times",
 )
 @click.option(
@@ -101,7 +101,7 @@ def cli():
     type=str,
     multiple=True,
     required=False,
-    default=["Place Selectivity", "Grid Selectivity"],
+    default=("Place Selectivity", "Grid Selectivity"),
     help="namespace containing input selectivity features",
 )
 @click.option("--use-coreneuron", is_flag=True, help="enable use of CoreNEURON")
@@ -247,14 +247,14 @@ def show(
 )
 @click.option(
     "--spike-events-path",
-    "-s",
     type=click.Path(),
     help="path to neuroh5 file containing spike times",
 )
 @click.option(
     "--spike-events-namespace",
+    multiple=True,
     type=str,
-    default="Spike Events",
+    default=("Spike Events",),
     help="namespace containing spike times",
 )
 @click.option(
@@ -287,7 +287,7 @@ def show(
     type=str,
     multiple=True,
     required=False,
-    default=["Place Selectivity", "Grid Selectivity"],
+    default=("Place Selectivity", "Grid Selectivity"),
     help="namespace containing input selectivity features",
 )
 @click.option(
@@ -535,9 +535,9 @@ def go(
 )
 @click.option(
     "--spike-events-namespace",
+    multiple=True,
     type=str,
-    required=False,
-    default="Spike Events",
+    default=("Spike Events",),
     help="namespace containing input spike times",
 )
 @click.option(
@@ -570,7 +570,7 @@ def go(
     type=str,
     multiple=True,
     required=False,
-    default=["Place Selectivity", "Grid Selectivity"],
+    default=("Place Selectivity", "Grid Selectivity"),
     help="namespace containing input selectivity features",
 )
 @click.option(

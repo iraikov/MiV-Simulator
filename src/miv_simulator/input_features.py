@@ -5,7 +5,6 @@ import sys
 import time
 import h5py
 from typing import Dict, List, Optional, Tuple, Any, Callable
-from collections import defaultdict
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import numpy as np
@@ -14,7 +13,6 @@ from miv_simulator.utils import config_logging, get_script_logger
 from miv_simulator.stimulus import stationary_phase_mod
 from mpi4py import MPI
 from neuroh5.io import (
-    NeuroH5CellAttrGen,
     append_cell_attributes,
     read_population_ranges,
 )
@@ -27,6 +25,95 @@ from spike_encoder import (
 )
 
 logger = get_script_logger(os.path.basename(__file__))
+
+
+def constant_rate_signal_array(
+    time_config: EncoderTimeConfig,
+    phase_mod_config: Optional[Any] = None,
+    initial_phase: float = 0.0,
+    equilibrate: Optional[Tuple[np.ndarray, int]] = None,
+) -> np.ndarray:
+    """
+    Builds a modulation envelope for a constant-rate
+    ("linear_rate" / "constant" selectivity) input: 1.0 at every time bin of
+    `time_config` by default, multiplied by an oscillatory phase-modulation
+    envelope (renormalized so its mean stays at 1.0, so that the average
+    output rate is unaffected by modulation) and/or a ramp that suppresses
+    the response during an initial equilibration period.
+    """
+    num_steps = time_config.num_steps
+    if phase_mod_config is not None:
+        t = time_config.get_time_vector_ms()
+        envelope = stationary_phase_mod(
+            t,
+            phase_mod_config.phase_range,
+            phase_mod_config.phase_pref,
+            phase_mod_config.phase_offset + initial_phase,
+            phase_mod_config.mod_depth,
+            phase_mod_config.frequency,
+        )
+        mean_envelope = np.mean(envelope)
+        if mean_envelope > 0.0:
+            envelope = envelope / mean_envelope
+    else:
+        envelope = np.ones(num_steps, dtype=np.float64)
+
+    if equilibrate is not None:
+        equilibrate_filter, equilibrate_len = equilibrate
+        envelope[:equilibrate_len] = np.multiply(
+            envelope[:equilibrate_len], equilibrate_filter
+        )
+
+    return envelope
+
+
+def constant_rate_vector(
+    peak_rate: float,
+    time_config: EncoderTimeConfig,
+    phase_mod_config: Optional[Any] = None,
+    initial_phase: float = 0.0,
+    equilibrate: Optional[Tuple[np.ndarray, int]] = None,
+) -> np.ndarray:
+    """
+    Returns the instantaneous firing rate (Hz) at each time bin of
+    `time_config` for a constant-selectivity input.
+    """
+    envelope = constant_rate_signal_array(
+        time_config, phase_mod_config, initial_phase, equilibrate
+    )
+    return envelope * peak_rate
+
+
+def generate_constant_rate_spike_train(
+    peak_rate: float,
+    time_config: EncoderTimeConfig,
+    phase_mod_config: Optional[Any] = None,
+    initial_phase: float = 0.0,
+    equilibrate: Optional[Tuple[np.ndarray, int]] = None,
+    local_random: Optional[np.random.RandomState] = None,
+) -> np.ndarray:
+    """
+    Generates spike times (ms, relative to the start of `time_config`) for a
+    homogeneous or phase-modulated Poisson process with the given peak rate,
+    using the neural_spike_encoding PoissonSpikeGenerator.
+    """
+    rates_hz = constant_rate_vector(
+        peak_rate, time_config, phase_mod_config, initial_phase, equilibrate
+    )
+    bin_time_config = EncoderTimeConfig(
+        duration_ms=time_config.dt_ms, dt_ms=time_config.dt_ms
+    )
+    generator = PoissonSpikeGenerator(
+        time_config=bin_time_config, random_seed=local_random
+    )
+    spike_times, _ = generator.encode(
+        rates_hz.reshape(-1, 1), start_time_ms=0.0, return_times=True
+    )
+    times = spike_times[0]
+    if len(times) == 0:
+        return np.asarray([], dtype=np.float32)
+    return np.asarray(np.concatenate(times), dtype=np.float32)
+
 
 sys_excepthook = sys.excepthook
 
@@ -83,6 +170,32 @@ class InputModality(ABC):
     def from_feature_coordinates(self, feature_coordinates: np.ndarray) -> np.ndarray:
         """Convert feature space coordinates to modality-specific coordinates."""
         pass
+
+
+class ConstantModality(InputModality):
+    """
+    Modality for inputs whose response does not depend on any external
+    signal or feature-space position (e.g. a "constant" selectivity input
+    that fires at a fixed peak rate for the whole population). Carries a
+    single dimensionless coordinate for bookkeeping only.
+    """
+
+    def __init__(self, name: str = "constant"):
+        feature_coordinate_system = CoordinateSystemConfig(
+            dimensions=1,
+            bounds=[(0.0, 1.0)],
+            units=["dimensionless"],
+        )
+        super().__init__(name, "constant", feature_coordinate_system)
+
+    def preprocess_signal(self, stimulus: np.ndarray) -> np.ndarray:
+        return stimulus
+
+    def to_feature_coordinates(self, modality_coordinates: np.ndarray) -> np.ndarray:
+        return modality_coordinates
+
+    def from_feature_coordinates(self, feature_coordinates: np.ndarray) -> np.ndarray:
+        return feature_coordinates
 
 
 class LinearRateInput:
@@ -206,6 +319,10 @@ class ReceptiveFieldInput:
         return self.encoder.encode(signal)
 
 
+FEATURE_TYPE_CODES = {"linear_rate": 0, "receptive_field": 1}
+FEATURE_TYPE_NAMES = {code: name for name, code in FEATURE_TYPE_CODES.items()}
+
+
 class FeatureEncoding:
     """Specification for a feature encoder."""
 
@@ -296,7 +413,9 @@ class InputFeature:
     def to_attribute_dict(self) -> Dict[str, np.ndarray]:
         """Convert to attribute dictionary for storage."""
         attr_dict = {
-            "Feature Type": np.array([self.encoding.feature_type], dtype=np.uint8),
+            "Feature Type": np.array(
+                [FEATURE_TYPE_CODES[self.encoding.feature_type]], dtype=np.uint8
+            ),
             "Position": self.position.astype(np.float32),
         }
         # Add encoder-specific attributes
@@ -314,13 +433,13 @@ class InputFeature:
                 if isinstance(v, (int, float))
             }
         )
-        # Add metadata
+        # Add any extra metadata supplied at construction time
         attr_dict.update(
             {
                 k: np.array(
                     [v], dtype=np.float32 if isinstance(v, (int, float)) else object
                 )
-                for k, v in self.metadata.items()
+                for k, v in self.kwargs.items()
                 if isinstance(v, (int, float, str))
             }
         )
@@ -463,8 +582,8 @@ class InputFeaturePopulation:
     def _generate_position(self, local_random: np.random.RandomState) -> np.ndarray:
         """Generate a position in feature space according to the density function."""
         # TODO: use rejection sampling based on the provided density function
-        dimensions = self.modality.coordinate_system.dimensions
-        bounds = self.modality.coordinate_system.bounds
+        dimensions = self.modality.feature_coordinate_system.dimensions
+        bounds = self.modality.feature_coordinate_system.bounds
 
         position = np.zeros(dimensions)
         for d in range(dimensions):
@@ -1106,9 +1225,15 @@ def generate_input_features(
     debug_count: int,
 ):
     """
+    Writes the already-generated features of `population` (e.g. built via
+    `FeatureSpace.create_population(..., rank=..., size=...)`, which
+    distributes feature generation round-robin across MPI ranks) to a
+    NeuroH5 cell attributes namespace.
+
     :param env: env.Env
-    :param population: InputFeaturePopulation
-    :param coords_path: str (path to file)
+    :param population: InputFeaturePopulation with features already generated
+    :param coords_path: str (path to file); used only to validate that the
+        population's cell count matches the coordinates file
     :param distances_namespace: str
     :param output_path: str
     :param io_size: int
@@ -1145,7 +1270,6 @@ def generate_input_features(
     population_ranges = read_population_ranges(coords_path, comm)[0]
     population_name = population.name
 
-    reference_u_arc_distance_bounds_dict = {}
     if rank == 0:
         if population_name not in population_ranges:
             raise RuntimeError(
@@ -1166,145 +1290,74 @@ def generate_input_features(
                     f"generate_input_features: only {unique_gid_count}/{pop_size} unique cell indexes found "
                     f"for specified population: {population_name} in provided coords_path: {coords_path}"
                 )
-            try:
-                reference_u_arc_distance_bounds_dict[population_name] = (
-                    coords_f["Populations"][population_name][distances_namespace].attrs[
-                        "Reference U Min"
-                    ],
-                    coords_f["Populations"][population_name][distances_namespace].attrs[
-                        "Reference U Max"
-                    ],
-                )
-            except Exception:
-                raise RuntimeError(
-                    f"generate_input_features: problem locating attributes "
-                    f"containing reference bounds in namespace: "
-                    f"{distances_namespace} for population: {population_name} from "
-                    f"coords_path: {coords_path}"
-                )
     comm.barrier()
-    reference_u_arc_distance_bounds_dict = comm.bcast(
-        reference_u_arc_distance_bounds_dict, root=0
-    )
-
-    local_random = np.random.RandomState()
-
-    pop_norm_distances = {}
-
-    if rank == 0:
-        logger.info(f"Generating normalized distances for population {population}...")
-
-    reference_u_arc_distance_bounds = reference_u_arc_distance_bounds_dict[population]
-
-    this_pop_norm_distances = {}
 
     start_time = time.time()
-    gid_count = defaultdict(lambda: 0)
-    distances_attr_gen = NeuroH5CellAttrGen(
-        coords_path,
-        population,
-        namespace=distances_namespace,
-        comm=comm,
-        io_size=io_size,
-        cache_size=cache_size,
-    )
+    features = list(population.features.values())
+    if debug:
+        features = features[:debug_count]
 
-    ## Normalize population distances
-    for iter_count, (gid, distances_attr_dict) in enumerate(distances_attr_gen):
-        req = comm.Ibarrier()
-        if gid is not None:
+    write_every = max(1, int(math.floor(write_size / comm.size)))
+
+    feature_attr_dict = {}
+    gid_count = 0
+    for i, feature in enumerate(features):
+        feature_attr_dict[feature.gid] = feature.to_attribute_dict()
+        gid_count += 1
+
+        if i > 0 and i % write_every == 0:
+            req = comm.Ibarrier()
+            total_gid_count = comm.reduce(gid_count, root=0, op=MPI.SUM)
+            req.wait()
             if rank == 0:
                 logger.info(
-                    f"Rank {rank} generating selectivity features for gid {gid}..."
+                    f"generated {total_gid_count} features in population {population_name} in "
+                    f"{(time.time() - start_time):.2f} s"
                 )
-            u_arc_distance = distances_attr_dict["U Distance"][0]
-            # v_arc_distance = distances_attr_dict["V Distance"][0]
-            norm_u_arc_distance = (
-                u_arc_distance - reference_u_arc_distance_bounds[0]
-            ) / (
-                reference_u_arc_distance_bounds[1] - reference_u_arc_distance_bounds[0]
-            )
 
-            this_pop_norm_distances[gid] = norm_u_arc_distance
-
-        features = population.generate_features(
-            start_gid=rank, rank=rank, size=comm.size, local_random=local_random
-        )
-
-        write_every = max(1, int(math.floor(write_size / comm.size)))
-
-        feature_attr_dict = {}
-        n_iter = comm.allreduce(len(features), op=MPI.MAX)
-        gid_count = 0
-        for i in range(n_iter):
-            feature = None
-            if i < len(features):
-                feature = features[i]
-                feature_attr_dict[feature.gid] = feature.to_attribute_dict()
-                gid_count += 1
-            if (i > 0 and i % write_every == 0) or (debug and i == debug_count):
+            if not dry_run:
                 req = comm.Ibarrier()
-                total_gid_count = comm.reduce(gid_count, root=0, op=MPI.SUM)
-                req.wait()
                 if rank == 0:
                     logger.info(
-                        f"generated {gid_count} features in population {population_name} in "
-                        f"{(time.time() - start_time):.2f} s"
+                        f"writing selectivity features for {population_name}..."
                     )
+                append_cell_attributes(
+                    output_path,
+                    population_name,
+                    feature_attr_dict,
+                    namespace=output_feature_namespace,
+                    comm=comm,
+                    io_size=io_size,
+                    chunk_size=chunk_size,
+                    value_chunk_size=value_chunk_size,
+                )
+                req.wait()
+                del feature_attr_dict
+                feature_attr_dict = {}
+                gc.collect()
 
-                if not dry_run:
-                    req = comm.Ibarrier()
-                    if rank == 0:
-                        logger.info(
-                            f"writing selectivity features for {population_name}..."
-                        )
-                    append_cell_attributes(
-                        output_path,
-                        population_name,
-                        feature_attr_dict,
-                        namespace=output_feature_namespace,
-                        comm=comm,
-                        io_size=io_size,
-                        chunk_size=chunk_size,
-                        value_chunk_size=value_chunk_size,
-                    )
-                    req.wait()
-                    del feature_attr_dict
-                    feature_attr_dict = {}
-                    gc.collect()
+    total_gid_count = comm.reduce(gid_count, root=0, op=MPI.SUM)
+    if rank == 0:
+        logger.info(
+            f"generated selectivity features for {total_gid_count} {population_name} cells in "
+            f"{(time.time() - start_time):.2f} s"
+        )
 
-            if debug and iter_count >= debug_count:
-                break
-
-        pop_norm_distances[population] = this_pop_norm_distances
-
-        total_gid_count = 0
+    if not dry_run:
         req = comm.Ibarrier()
-        total_gid_count = comm.reduce(gid_count, root=0, op=MPI.SUM)
-        req.wait()
-
         if rank == 0:
-            logger.info(
-                f"generated selectivity features for {total_gid_count} {population_name} cells in "
-                f"{(time.time() - start_time):.2f} s"
-            )
-
-        if not dry_run:
-            req = comm.Ibarrier()
-            if rank == 0:
-                logger.info(f"writing selectivity features for {population}...")
-            append_cell_attributes(
-                output_path,
-                population,
-                feature_attr_dict,
-                namespace=output_feature_namespace,
-                comm=comm,
-                io_size=io_size,
-                chunk_size=chunk_size,
-                value_chunk_size=value_chunk_size,
-            )
-            req.wait()
-            del feature_attr_dict
-            gc.collect()
-        req = comm.Ibarrier()
+            logger.info(f"writing selectivity features for {population_name}...")
+        append_cell_attributes(
+            output_path,
+            population_name,
+            feature_attr_dict,
+            namespace=output_feature_namespace,
+            comm=comm,
+            io_size=io_size,
+            chunk_size=chunk_size,
+            value_chunk_size=value_chunk_size,
+        )
         req.wait()
+        del feature_attr_dict
+        gc.collect()
+    comm.barrier()

@@ -13,7 +13,7 @@ from matplotlib.colors import BoundaryNorm
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.ticker import MaxNLocator
 from matplotlib.animation import FuncAnimation, writers
-from miv_simulator import cells, spikedata, statedata, stimulus, synapses
+from miv_simulator import cells, spikedata, statedata, synapses
 from miv_simulator.volume import network_volume
 from miv_simulator.env import Env
 from miv_simulator.utils import (
@@ -39,6 +39,8 @@ from neuroh5.io import (
     NeuroH5ProjectionGen,
     bcast_cell_attributes,
 )
+from spike_encoder import EncoderTimeConfig
+from miv_simulator.input_features import FEATURE_TYPE_NAMES, constant_rate_vector
 from scipy import interpolate, ndimage, signal
 
 if hasattr(h, "nrnmpi_init"):
@@ -2511,25 +2513,43 @@ def plot_network_clamp(
                 "plot_network_clamp: config_file must be provided with target_input_features_path."
             )
         env = Env(
-            config_file=config_file,
-            arena_id=target_input_features_arena_id,
-            trajectory_id=target_input_features_trajectory_id,
+            config=config_file,
             config_prefix=config_prefix,
         )
 
         if env.analysis_config is not None:
             baks_config.update(env.analysis_config["Firing Rate Inference"])
 
-        target_trj_rate_maps = stimulus.rate_maps_from_features(
-            env,
-            state_pop_name,
-            cell_index_set=[gid],
-            input_features_path=target_input_features_path,
-            input_features_namespace=target_input_features_namespace,
-            time_range=time_range,
-            include_time=True,
+        target_time_config = EncoderTimeConfig(
+            duration_ms=time_range[1] - time_range[0],
+            dt_ms=float(env.stimulus_config["Temporal Resolution"]),
         )
-        target_rate_time, target_rate = target_trj_rate_maps[gid]
+        target_features_ns = (
+            f"{target_input_features_namespace} {target_input_features_arena_id}"
+        )
+        target_features_attr_iter = read_cell_attributes(
+            target_input_features_path,
+            state_pop_name,
+            namespace=target_features_ns,
+            mask={"Feature Type", "peak_rate"},
+        )
+        target_selectivity_attr_dict = dict(target_features_attr_iter).get(gid, None)
+        if target_selectivity_attr_dict is None:
+            raise RuntimeError(
+                f"plot_network_clamp: no target input features found for gid {gid} "
+                f"in namespace {target_features_ns}"
+            )
+        this_feature_type = int(target_selectivity_attr_dict["Feature Type"][0])
+        this_feature_type_name = FEATURE_TYPE_NAMES[this_feature_type]
+        if this_feature_type_name != "linear_rate":
+            raise RuntimeError(
+                "plot_network_clamp: target feature type "
+                f"{this_feature_type_name} is not supported; "
+                "only 'linear_rate' features are currently implemented"
+            )
+        peak_rate = float(target_selectivity_attr_dict["peak_rate"][0])
+        target_rate = constant_rate_vector(peak_rate, target_time_config)
+        target_rate_time = target_time_config.get_time_vector_ms() + time_range[0]
         target_rate_ip = interpolate.Akima1DInterpolator(target_rate_time, target_rate)
 
     maxN = 0

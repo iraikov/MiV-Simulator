@@ -20,7 +20,9 @@ class ClampShow(Component):
         mechanisms_path: str = "."
         dataset_path: Optional[str] = None
         spike_events_path: Optional[str] = None
-        spike_events_namespace: str = "Spike Events"
+        spike_events_namespaces: List[str] = Field(
+            default_factory=lambda: ["Spike Events"]
+        )
         spike_events_t: str = "t"
         input_features_path: Optional[str] = None
         input_features_namespaces: List[str] = Field(
@@ -45,7 +47,7 @@ class ClampShow(Component):
             dataset_prefix=self.config.dataset_path,
             results_path=self.local_directory("data/results", create=True),
             spike_events_path=self.config.spike_events_path,
-            spike_events_namespace=self.config.spike_events_namespace,
+            spike_events_namespaces=self.config.spike_events_namespaces,
             spike_events_t=self.config.spike_events_t,
             input_features_path=self.config.input_features_path,
             input_features_namespaces=self.config.input_features_namespaces,

@@ -1,19 +1,23 @@
 """
 Integration tests for optimize_network module using the new
-_network_objectives API.  These tests do not import miv_simulator.
+_network_objectives API.
+
+The real optimize_network and network_objectives modules are imported
+canonically, with only the dmosopt package stubbed, since dmosopt is
+not a miv_simulator dependency and its import requires spawning a
+distributed worker pool.
 """
 
 import sys
 import types
+
 import numpy as np
-import importlib.util
 
 # ---------------------------------------------------------------------------
-# Build a fake ``dmosopt`` package with a real ``MOASMO`` subpackage so
-# ``from dmosopt.MOASMO import get_best`` succeeds.
+# Stub the ``dmosopt`` package so that importing optimize_network does not
+# require a distributed worker environment.
 # ---------------------------------------------------------------------------
 
-# Fake dmosopt package
 dmosopt_pkg = types.ModuleType("dmosopt")
 dmosopt_pkg.__path__ = []  # makes it a package
 
@@ -28,91 +32,22 @@ dmosopt_moasmo.get_best = lambda *a, **k: None
 dmosopt_pkg.dmosopt = dmosopt_dmo
 dmosopt_pkg.MOASMO = dmosopt_moasmo
 
+stub_names = ["dmosopt", "dmosopt.dmosopt", "dmosopt.MOASMO"]
+saved_modules = {name: sys.modules.get(name) for name in stub_names}
+
 sys.modules["dmosopt"] = dmosopt_pkg
 sys.modules["dmosopt.dmosopt"] = dmosopt_dmo
 sys.modules["dmosopt.MOASMO"] = dmosopt_moasmo
 
-# Other external deps
-sys.modules["neuron"] = types.ModuleType("neuron")
-sys.modules["neuron"].h = None
-sys.modules["click"] = types.ModuleType("click")
-sys.modules["click"].get_current_context = lambda: None
-sys.modules["mpi4py"] = types.ModuleType("mpi4py")
-sys.modules["mpi4py"].MPI = types.ModuleType("mpi4py.MPI")
-sys.modules["mpi4py"].MPI.COMM_WORLD = types.SimpleNamespace(size=1)
+from miv_simulator import network_objectives as mod_no  # noqa: E402
+from miv_simulator import optimize_network as mod_on  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Build a fake ``miv_simulator`` package tree so the real optimize_network
-# module can execute its imports.
-# ---------------------------------------------------------------------------
-
-fake_miv = types.ModuleType("miv_simulator")
-
-# env
-fake_env_mod = types.ModuleType("miv_simulator.env")
-fake_env_mod.Env = lambda **kw: None  # placeholder
-fake_miv.env = fake_env_mod
-
-# network
-fake_network_mod = types.ModuleType("miv_simulator.network")
-fake_miv.network = fake_network_mod
-
-# mechanisms
-fake_mechanisms_mod = types.ModuleType("miv_simulator.mechanisms")
-fake_mechanisms_mod.compile_and_load = lambda **kw: None
-fake_miv.mechanisms = fake_mechanisms_mod
-
-# utils
-fake_utils_mod = types.ModuleType("miv_simulator.utils")
-fake_utils_mod.read_from_yaml = lambda x: {}
-fake_utils_mod.write_to_yaml = lambda p, d: None
-fake_utils_mod.get_module_logger = lambda name: types.SimpleNamespace(
-    info=lambda *a, **k: None
-)
-fake_miv.utils = fake_utils_mod
-
-# synapses
-fake_synapses_mod = types.ModuleType("miv_simulator.synapses")
-_syn = lambda **kw: None  # dummy SynParam-like object # noqa: E731
-_syn._asdict = lambda: {}
-fake_synapses_mod.syn_param_from_dict = lambda d: _syn
-fake_synapses_mod.SynParam = type("SynParam", (), {})
-fake_miv.synapses = fake_synapses_mod
-
-# optimization
-fake_optimization_mod = types.ModuleType("miv_simulator.optimization")
-fake_optimization_mod.optimization_params = lambda *a, **k: None
-fake_optimization_mod.update_network_params = lambda env, ptv: None
-fake_optimization_mod.network_features = lambda env, t1, t2, pops: {}
-fake_miv.optimization = fake_optimization_mod
-
-# Load the real network_objectives module
-
-spec_no = importlib.util.spec_from_file_location(
-    "miv_simulator.network_objectives",
-    "src/miv_simulator/network_objectives.py",
-)
-mod_no = importlib.util.module_from_spec(spec_no)
-spec_no.loader.exec_module(mod_no)
-fake_miv.network_objectives = mod_no
-
-# Register the package tree
-sys.modules["miv_simulator"] = fake_miv
-sys.modules["miv_simulator.env"] = fake_miv.env
-sys.modules["miv_simulator.network"] = fake_miv.network
-sys.modules["miv_simulator.mechanisms"] = fake_miv.mechanisms
-sys.modules["miv_simulator.utils"] = fake_miv.utils
-sys.modules["miv_simulator.synapses"] = fake_miv.synapses
-sys.modules["miv_simulator.optimization"] = fake_miv.optimization
-sys.modules["miv_simulator.network_objectives"] = fake_miv.network_objectives
-
-# Finally load the real optimize_network module
-spec2 = importlib.util.spec_from_file_location(
-    "miv_simulator.optimize_network",
-    "src/miv_simulator/optimize_network.py",
-)
-mod_on = importlib.util.module_from_spec(spec2)
-spec2.loader.exec_module(mod_on)
+# Restore the dmosopt modules that were shadowed by the stubs
+for name, module in saved_modules.items():
+    if module is None:
+        sys.modules.pop(name, None)
+    else:
+        sys.modules[name] = module
 
 
 # ---------------------------------------------------------------------------
